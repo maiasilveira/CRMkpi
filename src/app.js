@@ -4,7 +4,9 @@ const path = require('node:path');
 const { abrirBanco } = require('./db');
 const migrarCore = require('./core/schema');
 const { criarCoreService } = require('./core/service');
-const { rotasCore } = require('./core/routes');
+const { rotasCore, rotasAuth } = require('./core/routes');
+const { middlewareAutenticacao } = require('./core/autenticacao');
+const { criarSso } = require('./core/sso');
 
 // Catálogo de módulos. A ordem importa apenas para injeção de dependências opcionais.
 const CATALOGO = {
@@ -24,8 +26,19 @@ function criarApp({ dbFile, modulos } = {}) {
   migrarCore(db);
   const core = criarCoreService(db);
 
+  const sso = criarSso(core);
+
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    next();
+  });
+  app.use('/api', express.json({ limit: '2mb' }));
+  app.use('/api', middlewareAutenticacao(core, { publicas: ['/auth'] }));
+  app.use('/api/auth', rotasAuth(core, sso));
 
   const registrados = {};
   for (const nome of Object.keys(CATALOGO)) {

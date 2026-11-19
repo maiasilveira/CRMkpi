@@ -2,6 +2,7 @@
 const { transacao } = require('../../db');
 const E = require('../../core/erros');
 const calc = require('./calculo');
+const { usuarioAtual } = require('../../core/contexto');
 
 const POLARIDADES = ['maior_melhor', 'menor_melhor', 'faixa'];
 const FREQUENCIAS = ['mensal', 'bimestral', 'trimestral', 'semestral', 'anual'];
@@ -36,6 +37,7 @@ function criarIndicadoresService(db, core) {
       ativo: d.ativo === undefined ? 1 : (d.ativo ? 1 : 0),
     };
     core.obterDepartamento(ind.departamento_id);
+    core.garantirEditar(ind.departamento_id);
     const erros = calc.validarFaixa(ind);
     if (erros.length) throw new E.ErroValidacao(erros.join('; '));
     return ind;
@@ -61,6 +63,8 @@ function criarIndicadoresService(db, core) {
   function listar({ departamento_id, status, todos } = {}) {
     const cond = []; const args = [];
     if (!todos) cond.push('i.ativo = 1');
+    const f = core.filtroEscopo('i.departamento_id');
+    if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     if (departamento_id) { cond.push('i.departamento_id = ?'); args.push(Number(departamento_id)); }
     const lista = db.prepare(`SELECT i.*, d.nome AS departamento FROM ind_indicadores i
         JOIN departamentos d ON d.id = i.departamento_id
@@ -72,6 +76,7 @@ function criarIndicadoresService(db, core) {
     const ind = db.prepare(`SELECT i.*, d.nome AS departamento FROM ind_indicadores i
         JOIN departamentos d ON d.id = i.departamento_id WHERE i.id = ?`).get(id);
     if (!ind) throw new E.NaoEncontrado('Indicador');
+    core.garantirVer(ind.departamento_id);
     return enriquecer(ind);
   }
 
@@ -83,7 +88,7 @@ function criarIndicadoresService(db, core) {
     }
     const campos = Object.keys(ind);
     if (id) {
-      obter(id);
+      core.garantirEditar(obter(id).departamento_id);
       db.prepare(`UPDATE ind_indicadores SET ${campos.map((c) => c + '=?').join(',')} WHERE id=?`)
         .run(...campos.map((c) => ind[c]), id);
       audit('indicador', id, 'atualizar', ind);
@@ -96,7 +101,7 @@ function criarIndicadoresService(db, core) {
   }
 
   function excluir(id) {
-    obter(id);
+    core.garantirEditar(obter(id).departamento_id);
     db.prepare('DELETE FROM ind_indicadores WHERE id=?').run(id);
     audit('indicador', id, 'excluir');
   }
@@ -114,6 +119,7 @@ function criarIndicadoresService(db, core) {
   /** Registra (ou substitui) o valor de um período. A meta/range vigentes são gravados como snapshot. */
   function registrarMedicao(indicadorId, dados) {
     const ind = obter(indicadorId);
+    core.garantirEditar(ind.departamento_id);
     const periodo = E.periodo(dados.periodo);
     const valor = E.numero(dados.valor, 'valor', { obrigatorio: true });
     const status = calc.classificar(ind, valor);
@@ -135,8 +141,9 @@ function criarIndicadoresService(db, core) {
   }
 
   function excluirMedicao(medicaoId) {
-    const m = db.prepare('SELECT id FROM ind_medicoes WHERE id=?').get(medicaoId);
+    const m = db.prepare('SELECT id, indicador_id FROM ind_medicoes WHERE id=?').get(medicaoId);
     if (!m) throw new E.NaoEncontrado('Medição');
+    core.garantirEditar(obter(m.indicador_id).departamento_id);
     db.prepare('DELETE FROM ind_medicoes WHERE id=?').run(medicaoId);
     audit('medicao', medicaoId, 'excluir');
   }
@@ -171,6 +178,7 @@ function criarIndicadoresService(db, core) {
     const a = db.prepare(`SELECT a.*, m.periodo, m.valor, m.indicador_id FROM ind_analises a
         JOIN ind_medicoes m ON m.id = a.medicao_id WHERE a.id=?`).get(id);
     if (!a) throw new E.NaoEncontrado('Análise');
+    obter(a.indicador_id);
     return { ...a, conteudo: JSON.parse(a.conteudo) };
   }
 
@@ -182,6 +190,7 @@ function criarIndicadoresService(db, core) {
   function registrarAnalise(medicaoId, dados) {
     const med = db.prepare('SELECT * FROM ind_medicoes WHERE id=?').get(medicaoId);
     if (!med) throw new E.NaoEncontrado('Medição');
+    core.garantirEditar(obter(med.indicador_id).departamento_id);
     const tecnica = E.umDe(dados.tecnica, 'tecnica', TECNICAS);
     const conteudo = validarConteudo(tecnica, dados.conteudo);
     const causa = E.texto(dados.causa_raiz, 'causa_raiz')
@@ -194,7 +203,7 @@ function criarIndicadoresService(db, core) {
   }
 
   function excluirAnalise(id) {
-    obterAnalise(id);
+    core.garantirEditar(obter(obterAnalise(id).indicador_id).departamento_id);
     db.prepare('DELETE FROM ind_analises WHERE id=?').run(id);
     audit('analise', id, 'excluir');
   }
@@ -223,6 +232,7 @@ function criarIndicadoresService(db, core) {
         FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id
         JOIN departamentos d ON d.id=i.departamento_id WHERE p.id=?`).get(id);
     if (!p) throw new E.NaoEncontrado('Plano de ação');
+    core.garantirVer(p.departamento_id);
     const acoes = db.prepare('SELECT * FROM ind_acoes WHERE plano_id=? ORDER BY quando, id').all(id).map(decorarAcao);
     const validas = acoes.filter((a) => a.status !== 'cancelada');
     const concl = validas.filter((a) => a.status === 'concluida').length;
@@ -241,6 +251,8 @@ function criarIndicadoresService(db, core) {
     if (indicador_id) { cond.push('p.indicador_id=?'); args.push(Number(indicador_id)); }
     if (departamento_id) { cond.push('i.departamento_id=?'); args.push(Number(departamento_id)); }
     if (status) { cond.push('p.status=?'); args.push(status); }
+    const f = core.filtroEscopo('i.departamento_id');
+    if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     let planos = db.prepare(`SELECT p.id FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id
         ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY p.id DESC`).all(...args).map((r) => obterPlano(r.id));
     if (atrasados === '1' || atrasados === true) planos = planos.filter((p) => p.acoes_atrasadas > 0);
@@ -249,7 +261,7 @@ function criarIndicadoresService(db, core) {
 
   function criarPlano(dados) {
     const indicadorId = E.numero(dados.indicador_id, 'indicador_id', { obrigatorio: true });
-    obter(indicadorId);
+    core.garantirEditar(obter(indicadorId).departamento_id);
     const analiseId = E.numero(dados.analise_id, 'analise_id');
     if (analiseId) {
       const a = obterAnalise(analiseId);
@@ -270,6 +282,7 @@ function criarIndicadoresService(db, core) {
 
   function atualizarPlano(id, dados) {
     const p = obterPlano(id);
+    core.garantirEditar(p.departamento_id);
     const status = E.umDe(dados.status, 'status', STATUS_PLANO, p.status);
     const eficacia = E.umDe(dados.eficacia, 'eficacia', EFICACIA, p.eficacia || 'pendente');
     if (eficacia !== 'pendente') E.exigir(status === 'concluido', 'A verificação de eficácia só pode ser registrada em planos concluídos');
@@ -287,7 +300,7 @@ function criarIndicadoresService(db, core) {
   }
 
   function excluirPlano(id) {
-    obterPlano(id);
+    core.garantirEditar(obterPlano(id).departamento_id);
     db.prepare('DELETE FROM ind_planos WHERE id=?').run(id);
     audit('plano', id, 'excluir');
   }
@@ -300,6 +313,7 @@ function criarIndicadoresService(db, core) {
 
   function adicionarAcao(planoId, dados) {
     const p = obterPlano(planoId);
+    core.garantirEditar(p.departamento_id);
     E.exigir(!['concluido', 'cancelado'].includes(p.status), 'Plano encerrado não aceita novas ações');
     const id = inserirAcao(planoId, normalizarAcao(dados));
     if (p.status === 'aberto') db.prepare(`UPDATE ind_planos SET status='em_andamento' WHERE id=?`).run(planoId);
@@ -310,6 +324,12 @@ function criarIndicadoresService(db, core) {
   function atualizarAcao(acaoId, dados) {
     const atual = db.prepare('SELECT * FROM ind_acoes WHERE id=?').get(acaoId);
     if (!atual) throw new E.NaoEncontrado('Ação');
+    const pl = obterPlano(atual.plano_id);
+    // O responsável pela ação (campo "quem") pode atualizar o status dela mesmo sem ser gestor
+    const u = usuarioAtual();
+    const ehResponsavel = u && atual.quem && atual.quem.toLowerCase().includes(u.nome.toLowerCase());
+    if (ehResponsavel) dados = { status: dados.status };
+    else core.garantirEditar(pl.departamento_id);
     const a = normalizarAcao({ ...atual, ...dados });
     const concluidaEm = a.status === 'concluida' ? (atual.concluida_em || hoje()) : null;
     db.prepare(`UPDATE ind_acoes SET o_que=?, por_que=?, onde=?, quando=?, quem=?, como=?, quanto=?, status=?, concluida_em=? WHERE id=?`)
@@ -323,6 +343,7 @@ function criarIndicadoresService(db, core) {
   function excluirAcao(acaoId) {
     const atual = db.prepare('SELECT * FROM ind_acoes WHERE id=?').get(acaoId);
     if (!atual) throw new E.NaoEncontrado('Ação');
+    core.garantirEditar(obterPlano(atual.plano_id).departamento_id);
     db.prepare('DELETE FROM ind_acoes WHERE id=?').run(acaoId);
     audit('acao', acaoId, 'excluir');
     return obterPlano(atual.plano_id);
@@ -380,6 +401,13 @@ function criarIndicadoresService(db, core) {
       return vals[vals.length - 1];
     },
   };
+
+  // Permite que comentários/anexos do núcleo saibam a qual departamento cada registro pertence
+  const deptoInd = (id) => db.prepare('SELECT departamento_id d FROM ind_indicadores WHERE id=?').get(id)?.d;
+  core.registrarEntidade('indicadores', 'indicador', deptoInd);
+  core.registrarEntidade('indicadores', 'medicao', (id) => deptoInd(db.prepare('SELECT indicador_id i FROM ind_medicoes WHERE id=?').get(id)?.i));
+  core.registrarEntidade('indicadores', 'analise', (id) => deptoInd(db.prepare('SELECT m.indicador_id i FROM ind_analises a JOIN ind_medicoes m ON m.id=a.medicao_id WHERE a.id=?').get(id)?.i));
+  core.registrarEntidade('indicadores', 'plano', (id) => deptoInd(db.prepare('SELECT indicador_id i FROM ind_planos WHERE id=?').get(id)?.i));
 
   return {
     listar, obter, salvar, excluir,

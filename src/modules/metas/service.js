@@ -22,6 +22,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   const listarCiclos = () => db.prepare('SELECT id, nome, inicio, fim, status, nota_minima, encerrado_em FROM met_ciclos ORDER BY inicio DESC').all();
 
   function salvarCiclo(d, id) {
+    core.exigirPerfil('diretoria');
     const atual = id ? obterCiclo(id) : null;
     if (atual) E.exigir(atual.status !== 'encerrado', 'Ciclo encerrado não pode ser alterado');
     const c = {
@@ -100,10 +101,12 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   function obterMeta(id) {
     const m = db.prepare(`SELECT m.*, d.nome AS departamento FROM met_metas m JOIN departamentos d ON d.id=m.departamento_id WHERE m.id=?`).get(id);
     if (!m) throw new E.NaoEncontrado('Meta');
+    core.garantirVer(m.departamento_id);
     return m;
   }
 
   function salvarMeta(dados, id) {
+    core.exigirPerfil('diretoria');
     const m = normalizarMeta(dados);
     if (id) {
       const atual = obterMeta(id);
@@ -123,6 +126,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   }
 
   function excluirMeta(id) {
+    core.exigirPerfil('diretoria');
     const m = obterMeta(id);
     garantirEditavel(m.ciclo_id, m.departamento_id);
     db.prepare('DELETE FROM met_metas WHERE id=?').run(id);
@@ -132,6 +136,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   // ---------------- Resultados ----------------
   function registrarResultado(metaId, d) {
     const m = obterMeta(metaId);
+    core.garantirEditar(m.departamento_id);
     const c = garantirEditavel(m.ciclo_id, m.departamento_id);
     E.exigir(m.fonte === 'manual', 'Meta vinculada a indicador: o resultado vem automaticamente do módulo Indicadores');
     const periodo = E.periodo(d.periodo);
@@ -146,6 +151,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
 
   function excluirResultado(metaId, periodo) {
     const m = obterMeta(metaId);
+    core.garantirEditar(m.departamento_id);
     garantirEditavel(m.ciclo_id, m.departamento_id);
     db.prepare('DELETE FROM met_resultados WHERE meta_id=? AND periodo=?').run(metaId, periodo);
     audit('resultado', metaId, 'excluir', { periodo });
@@ -195,6 +201,8 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     const cond = []; const args = [];
     if (ciclo_id) { cond.push('m.ciclo_id=?'); args.push(Number(ciclo_id)); }
     if (departamento_id) { cond.push('m.departamento_id=?'); args.push(Number(departamento_id)); }
+    const f = core.filtroEscopo('m.departamento_id');
+    if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     return db.prepare(`SELECT m.*, d.nome AS departamento FROM met_metas m JOIN departamentos d ON d.id=m.departamento_id
         ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY d.nome, m.peso DESC`).all(...args).map((m) => apurarMeta(m));
   }
@@ -202,7 +210,10 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   /** Scorecard do ciclo: nota de cada departamento e bônus. */
   function apurarCiclo(cicloId) {
     const ciclo = obterCiclo(cicloId);
-    if (ciclo.status === 'encerrado' && ciclo.snapshot) return { ...ciclo.snapshot, congelado: true };
+    if (ciclo.status === 'encerrado' && ciclo.snapshot) {
+      const deps = ciclo.snapshot.departamentos.filter((d) => core.podeVer(d.departamento_id));
+      return { ...ciclo.snapshot, departamentos: deps, congelado: true };
+    }
     const metas = listarMetas({ ciclo_id: cicloId });
     const deptos = new Map();
     for (const m of metas) {
@@ -211,6 +222,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     }
     // Inclui departamentos com bônus configurado mas ainda sem metas
     for (const b of db.prepare(`SELECT b.departamento_id, d.nome FROM met_bonus b JOIN departamentos d ON d.id=b.departamento_id WHERE ciclo_id=?`).all(cicloId)) {
+      if (!core.podeVer(b.departamento_id)) continue;
       if (!deptos.has(b.departamento_id)) deptos.set(b.departamento_id, { departamento_id: b.departamento_id, departamento: b.nome, metas: [] });
     }
     const departamentos = [...deptos.values()].map((d) => {
@@ -235,6 +247,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
 
   // ---------------- Bônus e aprovação ----------------
   function definirBonus(cicloId, deptoId, d) {
+    core.exigirPerfil('diretoria');
     garantirEditavel(cicloId, deptoId);
     core.obterDepartamento(deptoId);
     const valor = E.numero(d.valor_base, 'valor_base', { obrigatorio: true });
@@ -252,6 +265,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     const b = statusBonus(cicloId, deptoId);
     const fluxo = { submeter: ['aberto', 'submetido'], aprovar: ['submetido', 'aprovado'], reabrir: [null, 'aberto'] };
     E.exigir(fluxo[acao], 'Ação inválida (use submeter, aprovar ou reabrir)');
+    if (acao === 'submeter') core.garantirEditar(deptoId); else core.exigirPerfil('diretoria');
     const [de, para] = fluxo[acao];
     if (de) E.exigir(b.status === de, `Só é possível ${acao} uma apuração com status "${de}" (atual: "${b.status}")`);
     if (acao === 'submeter') {
@@ -265,6 +279,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   }
 
   function encerrarCiclo(cicloId) {
+    core.exigirPerfil('diretoria');
     const ciclo = obterCiclo(cicloId);
     E.exigir(ciclo.status !== 'encerrado', 'Ciclo já encerrado');
     const ap = apurarCiclo(cicloId);
@@ -280,6 +295,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
 
   /** Simulação "e se": calcula atingimento/bônus para valores hipotéticos sem gravar nada. */
   function simular(cicloId, deptoId, valores = {}) {
+    core.garantirVer(deptoId);
     const ciclo = obterCiclo(cicloId);
     const metas = listarMetas({ ciclo_id: cicloId, departamento_id: deptoId }).map((m) => {
       const v = valores[m.id] !== undefined && valores[m.id] !== '' ? Number(valores[m.id]) : m.valor_apurado;
@@ -291,6 +307,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   }
 
   function exportarCsv(cicloId) {
+    core.exigirPerfil('diretoria');
     const ap = apurarCiclo(cicloId);
     const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const linhas = [['Departamento', 'Meta', 'Peso', 'Gatilho', 'Alvo', 'Superação', 'Resultado', 'Atingimento %', 'Contribuição', 'Nota Depto', 'Bônus Base', 'Bônus Calculado', 'Status Apuração']];
@@ -301,6 +318,8 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     }
     return '﻿' + linhas.map((l) => l.map(esc).join(';')).join('\n');
   }
+
+  core.registrarEntidade('metas', 'meta', (id) => db.prepare('SELECT departamento_id d FROM met_metas WHERE id=?').get(id)?.d);
 
   return {
     listarCiclos, obterCiclo, salvarCiclo, encerrarCiclo,

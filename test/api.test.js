@@ -1,24 +1,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { criarApp } = require('../src/app');
-
-async function servidor(modulos) {
-  const { app } = criarApp({ dbFile: ':memory:', modulos });
-  const srv = await new Promise((ok) => { const s = app.listen(0, () => ok(s)); });
-  const base = `http://127.0.0.1:${srv.address().port}/api`;
-  const req = async (metodo, url, corpo) => {
-    const r = await fetch(base + url, { method: metodo, headers: { 'Content-Type': 'application/json' }, body: corpo ? JSON.stringify(corpo) : undefined });
-    const txt = await r.text();
-    let json = null; try { json = txt ? JSON.parse(txt) : null; } catch { json = txt; }
-    return { status: r.status, body: json };
-  };
-  return { srv, req };
-}
+const { servidor } = require('./helpers');
 
 test('fluxo completo: indicador → desvio → análise → plano → eficácia → meta vinculada', async (t) => {
-  const { srv, req } = await servidor();
-  t.after(() => srv.close());
+  const { fechar, req } = await servidor();
+  t.after(fechar);
 
   const dep = await req('POST', '/departamentos', { nome: 'Operações', sigla: 'OPS' });
   assert.equal(dep.status, 201);
@@ -127,8 +114,8 @@ test('fluxo completo: indicador → desvio → análise → plano → eficácia 
 });
 
 test('módulo Metas funciona sem o módulo Indicadores', async (t) => {
-  const { srv, req } = await servidor(['metas']);
-  t.after(() => srv.close());
+  const { fechar, req } = await servidor(['metas']);
+  t.after(fechar);
   assert.deepEqual((await req('GET', '/modulos')).body.map((m) => m.nome), ['metas']);
   assert.equal((await req('GET', '/indicadores')).status, 404);
   const dep = (await req('POST', '/departamentos', { nome: 'Vendas' })).body;
@@ -143,8 +130,8 @@ test('módulo Metas funciona sem o módulo Indicadores', async (t) => {
 });
 
 test('módulo Indicadores funciona sem o módulo Metas', async (t) => {
-  const { srv, req } = await servidor(['indicadores']);
-  t.after(() => srv.close());
+  const { fechar, req } = await servidor(['indicadores']);
+  t.after(fechar);
   assert.equal((await req('GET', '/metas/ciclos')).status, 404);
   const dep = (await req('POST', '/departamentos', { nome: 'RH' })).body;
   const i = await req('POST', '/indicadores', { nome: 'Turnover', departamento_id: dep.id, polaridade: 'menor_melhor', meta: 2, limite_superior: 3 });

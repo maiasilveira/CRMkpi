@@ -1,7 +1,7 @@
 'use strict';
+const { aplicarMigracoes, addColuna } = require('../../core/migracoes');
 // Tabelas exclusivas do módulo Indicadores (prefixo ind_).
-module.exports = function migrarIndicadores(db) {
-  db.exec(`
+const V1 = `
     CREATE TABLE IF NOT EXISTS ind_indicadores (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       codigo TEXT UNIQUE,
@@ -73,5 +73,14 @@ module.exports = function migrarIndicadores(db) {
     );
     CREATE INDEX IF NOT EXISTS ix_ind_med ON ind_medicoes(indicador_id, periodo);
     CREATE INDEX IF NOT EXISTS ix_ind_acao_plano ON ind_acoes(plano_id);
-  `);
+  `;
+
+const PASSOS = [
+  V1,
+];
+
+module.exports = function migrarIndicadores(db) {
+  aplicarMigracoes(db, 'indicadores', PASSOS);
 };
+module.exports.PASSOS = PASSOS;
+void addColuna;

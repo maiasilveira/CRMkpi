@@ -1,8 +1,8 @@
 'use strict';
+const { aplicarMigracoes, addColuna } = require('../../core/migracoes');
 // Tabelas exclusivas do módulo Metas (prefixo met_). Nenhuma FK para tabelas de outros módulos
 // além do núcleo (departamentos): o vínculo com indicadores é apenas um id lógico.
-module.exports = function migrarMetas(db) {
-  db.exec(`
+const V1 = `
     CREATE TABLE IF NOT EXISTS met_ciclos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       nome TEXT NOT NULL UNIQUE,
@@ -53,5 +53,14 @@ module.exports = function migrarMetas(db) {
       aprovado_em TEXT,
       UNIQUE (ciclo_id, departamento_id)
     );
-  `);
+  `;
+
+const PASSOS = [
+  V1,
+];
+
+module.exports = function migrarMetas(db) {
+  aplicarMigracoes(db, 'metas', PASSOS);
 };
+module.exports.PASSOS = PASSOS;
+void addColuna;
