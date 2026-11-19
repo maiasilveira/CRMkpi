@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KPI & Metas</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topo">
+    <button class="menu-btn" id="menuBtn" aria-label="Abrir menu">☰</button>
+    <a href="#/" class="marca"><span class="logo">◆</span> KPI &amp; Metas</a>
+    <nav id="nav" class="nav"></nav>
+    <button class="tema-btn" id="temaBtn" title="Alternar tema" aria-label="Alternar tema">🌓</button>
+  </header>
+  <main id="app" class="conteudo" aria-live="polite"></main>
+  <div id="modal" class="modal" hidden>
+    <div class="modal-caixa" role="dialog" aria-modal="true">
+      <div class="modal-topo"><h2 id="modalTitulo"></h2><button class="fechar" data-fechar aria-label="Fechar">✕</button></div>
+      <div id="modalCorpo"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

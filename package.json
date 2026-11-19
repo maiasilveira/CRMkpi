@@ -1,0 +1,29 @@
+{
+  "name": "crmkpi",
+  "version": "1.0.0",
+  "description": "Gestão de indicadores de desempenho (KPIs) e metas bonificáveis por departamento",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node src/seed.js",
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maiasilveira/CRMkpi.git"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/maiasilveira/CRMkpi/issues"
+  },
+  "homepage": "https://github.com/maiasilveira/CRMkpi#readme",
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "private": true
+}
