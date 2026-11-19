@@ -184,7 +184,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     if (meta_id) { cond.push('a.meta_id=?'); args.push(Number(meta_id)); }
     if (status) { cond.push('a.status=?'); args.push(status); }
     const f = core.filtroEscopo('m.departamento_id');
-    return db.prepare(`SELECT a.*, m.nome AS meta, m.ciclo_id, d.nome AS departamento FROM met_alteracoes a JOIN met_metas m ON m.id=a.meta_id
+    return db.prepare(`SELECT a.*, m.nome AS meta, m.ciclo_id, m.departamento_id, d.nome AS departamento FROM met_alteracoes a JOIN met_metas m ON m.id=a.meta_id
         JOIN departamentos d ON d.id=m.departamento_id WHERE 1=1 ${cond.length ? 'AND ' + cond.join(' AND ') : ''} ${f.sql} ORDER BY a.id DESC`).all(...args, ...f.args)
       .map((a) => ({ ...a, anteriores: a.anteriores ? JSON.parse(a.anteriores) : null, propostos: JSON.parse(a.propostos) }));
   }

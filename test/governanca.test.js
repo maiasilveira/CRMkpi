@@ -45,6 +45,7 @@ test('reuniões: pauta automática, decisões, escopo e alerta de atraso', async
   assert.equal(tipos[0], 'indicador_desvio');
   assert.ok(tipos.includes('plano_atrasado'));
   assert.match(r.pauta.itens[0].texto, /SEM análise de causa/);
+  assert.ok(r.pauta.itens.every((i) => !/Loja Centro/.test(i.texto)), 'pauta restrita ao escopo da reunião');
 
   const comDecisao = (await req('POST', `/governanca/reunioes/${r.id}/decisoes`, { descricao: 'Revisar escala de vendedores', responsavel: 'Gestora Centro', prazo: '2020-01-10' })).body;
   assert.equal(comDecisao.decisoes[0].atrasada, true);

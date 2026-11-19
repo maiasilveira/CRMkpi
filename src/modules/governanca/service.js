@@ -94,7 +94,7 @@ function criarGovernancaService(db, core, { indicadores = null, metas = null } =
           if (d.status_apuracao === 'submetido') itens.push({ tipo: 'apuracao_pendente', referencia: `#/metas?ciclo=${c.id}`, texto: `Aprovar apuração de metas de ${d.departamento} (nota ${d.nota}%)` });
           if (!d.elegivel) itens.push({ tipo: 'metas_risco', referencia: `#/metas?ciclo=${c.id}`, texto: `${d.departamento} abaixo da nota mínima de metas (${d.nota}%)` });
         }
-        for (const a of metas.listarAlteracoes({ status: 'pendente' }).filter((x) => x.ciclo_id === c.id)) itens.push({ tipo: 'alteracao_meta', referencia: '#/metas/alteracoes', texto: `Decidir alteração da meta "${a.meta}" (${a.departamento})` });
+        for (const a of metas.listarAlteracoes({ status: 'pendente' }).filter((x) => x.ciclo_id === c.id && noEscopo(x.departamento_id))) itens.push({ tipo: 'alteracao_meta', referencia: '#/metas/alteracoes', texto: `Decidir alteração da meta "${a.meta}" (${a.departamento})` });
       }
     }
     const decisoes = db.prepare(`SELECT d.*, r.titulo, r.data FROM gov_decisoes d JOIN gov_reunioes r ON r.id=d.reuniao_id
