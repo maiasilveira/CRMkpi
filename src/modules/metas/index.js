@@ -4,6 +4,7 @@
 const migrar = require('./schema');
 const { criarMetasService } = require('./service');
 const { rotasMetas } = require('./routes');
+const { criarPessoasService } = require('./pessoas');
 
 module.exports = {
   nome: 'metas',
@@ -18,7 +19,8 @@ module.exports = {
       .map((b) => ({ usuarios: notificacoes.porPerfil('diretoria', 'admin'), tipo: 'apuracao', titulo: `Apuração aguardando aprovação: ${b.depto}`,
         link: `#/metas?ciclo=${b.ciclo_id}`, chave: `apur:${b.ciclo_id}:${b.departamento_id}:${b.submetido_em}`,
         mensagem: `A apuração do departamento ${b.depto} no ciclo ${b.ciclo} aguarda aprovação desde ${b.submetido_em.slice(0, 10).split('-').reverse().join('/')}.` })));
-    app.use('/api/metas', rotasMetas(service));
-    return { service };
+    const pessoas = criarPessoasService(db, core, service);
+    app.use('/api/metas', rotasMetas(service, pessoas, core));
+    return { service, pessoas };
   },
 };

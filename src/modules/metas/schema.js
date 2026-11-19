@@ -59,6 +59,52 @@ const PASSOS = [
   V1,
   // v2 — data de submissão para lembretes de aprovação
   (db) => addColuna(db, 'met_bonus', 'submetido_em', 'TEXT'),
+  // v3 — metas individuais, desdobramento, regras do programa e versionamento de metas
+  (db) => {
+    addColuna(db, 'met_metas', 'colaborador_id', 'INTEGER REFERENCES met_colaboradores(id) ON DELETE CASCADE');
+    addColuna(db, 'met_metas', 'meta_pai_id', 'INTEGER REFERENCES met_metas(id) ON DELETE SET NULL');
+    for (const [c, def] of [
+      ['gatilho_corp_descricao', 'TEXT'], ['gatilho_corp_minimo', 'REAL'], ['gatilho_corp_resultado', 'REAL'],
+      ['redutor_falta_pct', 'REAL NOT NULL DEFAULT 0'], ['redutor_advertencia_pct', 'REAL NOT NULL DEFAULT 0'],
+      ['redutor_maximo_pct', 'REAL NOT NULL DEFAULT 100'], ['peso_departamento_padrao', 'REAL NOT NULL DEFAULT 70'],
+      ['dias_minimos_mes', 'INTEGER NOT NULL DEFAULT 15'],
+    ]) addColuna(db, 'met_ciclos', c, def);
+    db.exec(`
+      CREATE TABLE met_colaboradores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matricula TEXT NOT NULL UNIQUE,
+        nome TEXT NOT NULL,
+        email TEXT COLLATE NOCASE,
+        departamento_id INTEGER NOT NULL REFERENCES departamentos(id),
+        cargo TEXT,
+        salario REAL NOT NULL DEFAULT 0,
+        admissao TEXT NOT NULL,
+        desligamento TEXT,
+        ativo INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE met_participacoes (         -- elegibilidade do colaborador em um ciclo
+        ciclo_id INTEGER NOT NULL REFERENCES met_ciclos(id) ON DELETE CASCADE,
+        colaborador_id INTEGER NOT NULL REFERENCES met_colaboradores(id) ON DELETE CASCADE,
+        multiplo_salarios REAL NOT NULL DEFAULT 1, -- bônus-alvo = salário × múltiplo
+        peso_departamento REAL,                     -- % da nota que vem do departamento (resto = metas individuais)
+        faltas INTEGER NOT NULL DEFAULT 0,          -- faltas injustificadas no ciclo
+        advertencias INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (ciclo_id, colaborador_id)
+      );
+      CREATE TABLE met_alteracoes (             -- versionamento de regras das metas
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        meta_id INTEGER NOT NULL REFERENCES met_metas(id) ON DELETE CASCADE,
+        anteriores TEXT,
+        propostos TEXT NOT NULL,
+        justificativa TEXT,
+        status TEXT NOT NULL,                   -- pendente | aprovada | rejeitada | aplicada
+        solicitado_por TEXT, solicitado_por_id INTEGER,
+        decidido_por TEXT, decidido_em TEXT, motivo_decisao TEXT,
+        criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX ix_met_metas_colab ON met_metas(colaborador_id);
+    `);
+  },
 ];
 
 module.exports = function migrarMetas(db) {

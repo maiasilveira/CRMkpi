@@ -20,7 +20,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     if (!c) throw new E.NaoEncontrado('Ciclo');
     return { ...c, snapshot: c.snapshot ? JSON.parse(c.snapshot) : null };
   }
-  const listarCiclos = () => db.prepare('SELECT id, nome, inicio, fim, status, nota_minima, encerrado_em FROM met_ciclos ORDER BY inicio DESC').all();
+  const listarCiclos = () => db.prepare('SELECT id, nome, inicio, fim, status, nota_minima, encerrado_em FROM met_ciclos ORDER BY inicio DESC, id DESC').all();
 
   function salvarCiclo(d, id) {
     core.exigirPerfil('diretoria');
@@ -32,19 +32,29 @@ function criarMetasService(db, core, fonteIndicadores = null) {
       fim: E.periodo(d.fim, 'fim'),
       status: E.umDe(d.status, 'status', ['planejamento', 'ativo'], atual?.status || 'planejamento'),
       nota_minima: E.numero(d.nota_minima, 'nota_minima') ?? 0,
+      gatilho_corp_descricao: E.texto(d.gatilho_corp_descricao, 'gatilho_corp_descricao'),
+      gatilho_corp_minimo: E.numero(d.gatilho_corp_minimo, 'gatilho_corp_minimo'),
+      gatilho_corp_resultado: E.numero(d.gatilho_corp_resultado, 'gatilho_corp_resultado'),
+      redutor_falta_pct: E.numero(d.redutor_falta_pct, 'redutor_falta_pct') ?? 0,
+      redutor_advertencia_pct: E.numero(d.redutor_advertencia_pct, 'redutor_advertencia_pct') ?? 0,
+      redutor_maximo_pct: E.numero(d.redutor_maximo_pct, 'redutor_maximo_pct') ?? 100,
+      peso_departamento_padrao: E.numero(d.peso_departamento_padrao, 'peso_departamento_padrao') ?? 70,
+      dias_minimos_mes: E.numero(d.dias_minimos_mes, 'dias_minimos_mes') ?? 15,
     };
+    for (const k of ['redutor_falta_pct', 'redutor_advertencia_pct', 'redutor_maximo_pct', 'peso_departamento_padrao'])
+      E.exigir(c[k] >= 0 && c[k] <= 100, `"${k}" deve estar entre 0 e 100`);
+    E.exigir(c.dias_minimos_mes >= 1 && c.dias_minimos_mes <= 31, 'Dias mínimos no mês deve estar entre 1 e 31');
     E.exigir(c.inicio <= c.fim, 'Início do ciclo deve ser anterior ao fim');
     E.exigir(c.nota_minima >= 0 && c.nota_minima <= 100, 'Nota mínima deve estar entre 0 e 100');
     const dup = db.prepare('SELECT id FROM met_ciclos WHERE nome=? AND id IS NOT ?').get(c.nome, id ?? null);
     E.exigir(!dup, 'Já existe um ciclo com esse nome');
+    const cols = Object.keys(c);
     if (id) {
-      db.prepare('UPDATE met_ciclos SET nome=?, inicio=?, fim=?, status=?, nota_minima=? WHERE id=?')
-        .run(c.nome, c.inicio, c.fim, c.status, c.nota_minima, id);
+      db.prepare(`UPDATE met_ciclos SET ${cols.map((k) => k + '=?').join(',')} WHERE id=?`).run(...cols.map((k) => c[k]), id);
       audit('ciclo', id, 'atualizar', c);
       return obterCiclo(id);
     }
-    const r = db.prepare('INSERT INTO met_ciclos (nome, inicio, fim, status, nota_minima) VALUES (?,?,?,?,?)')
-      .run(c.nome, c.inicio, c.fim, c.status, c.nota_minima);
+    const r = db.prepare(`INSERT INTO met_ciclos (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...cols.map((k) => c[k]));
     audit('ciclo', Number(r.lastInsertRowid), 'criar', c);
     return obterCiclo(Number(r.lastInsertRowid));
   }
@@ -65,7 +75,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   function normalizarMeta(d) {
     const m = {
       ciclo_id: E.numero(d.ciclo_id, 'ciclo_id', { obrigatorio: true }),
-      departamento_id: E.numero(d.departamento_id, 'departamento_id', { obrigatorio: true }),
+      departamento_id: E.numero(d.departamento_id, 'departamento_id', { obrigatorio: !d.colaborador_id }),
       nome: E.texto(d.nome, 'nome', { obrigatorio: true }),
       descricao: E.texto(d.descricao, 'descricao'),
       unidade: E.texto(d.unidade, 'unidade'),
@@ -80,7 +90,18 @@ function criarMetasService(db, core, fonteIndicadores = null) {
       indicador_id: E.numero(d.indicador_id, 'indicador_id'),
       agregacao: E.umDe(d.agregacao, 'agregacao', AGREGACOES, 'ultimo'),
       responsavel: E.texto(d.responsavel, 'responsavel'),
+      colaborador_id: E.numero(d.colaborador_id, 'colaborador_id'),
+      meta_pai_id: E.numero(d.meta_pai_id, 'meta_pai_id'),
     };
+    if (m.colaborador_id) {
+      const col = db.prepare('SELECT * FROM met_colaboradores WHERE id=?').get(m.colaborador_id);
+      E.exigir(col, 'Colaborador não encontrado');
+      m.departamento_id = col.departamento_id; // meta individual pertence ao departamento do colaborador
+    }
+    if (m.meta_pai_id) {
+      const pai = db.prepare('SELECT ciclo_id FROM met_metas WHERE id=?').get(m.meta_pai_id);
+      E.exigir(pai && pai.ciclo_id === m.ciclo_id, 'A meta-mãe deve existir e pertencer ao mesmo ciclo');
+    }
     core.obterDepartamento(m.departamento_id);
     if (m.fonte === 'indicador') {
       E.exigir(fonteIndicadores, 'Módulo Indicadores não está ativo: use fonte "manual"');
@@ -93,10 +114,10 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     return m;
   }
 
-  function verificarPesos(cicloId, deptoId, metaId, novoPeso) {
-    const soma = db.prepare('SELECT COALESCE(SUM(peso),0) s FROM met_metas WHERE ciclo_id=? AND departamento_id=? AND id IS NOT ?')
-      .get(cicloId, deptoId, metaId ?? null).s;
-    E.exigir(soma + novoPeso <= 100.0001, `A soma dos pesos do departamento ficaria em ${soma + novoPeso}% (máximo 100%)`);
+  function verificarPesos(cicloId, deptoId, metaId, novoPeso, colaboradorId = null) {
+    const soma = db.prepare(`SELECT COALESCE(SUM(peso),0) s FROM met_metas WHERE ciclo_id=? AND departamento_id=? AND id IS NOT ?
+        AND colaborador_id IS ?`).get(cicloId, deptoId, metaId ?? null, colaboradorId ?? null).s;
+    E.exigir(soma + novoPeso <= 100.0001, `A soma dos pesos ${colaboradorId ? 'do colaborador' : 'do departamento'} ficaria em ${soma + novoPeso}% (máximo 100%)`);
   }
 
   function obterMeta(id) {
@@ -107,17 +128,39 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   }
 
   function salvarMeta(dados, id) {
-    core.exigirPerfil('diretoria');
     const m = normalizarMeta(dados);
+    // Metas de departamento: diretoria. Metas individuais: também o gestor do departamento.
+    if (m.colaborador_id) core.garantirEditar(m.departamento_id); else core.exigirPerfil('diretoria');
+    let atual = null;
     if (id) {
-      const atual = obterMeta(id);
+      atual = obterMeta(id);
       garantirEditavel(atual.ciclo_id, atual.departamento_id);
+      E.exigir(atual.ciclo_id === m.ciclo_id, 'Não é possível mover a meta para outro ciclo');
+      E.exigir(m.meta_pai_id !== id, 'Uma meta não pode ser mãe de si mesma');
     }
-    garantirEditavel(m.ciclo_id, m.departamento_id);
-    verificarPesos(m.ciclo_id, m.departamento_id, id, m.peso);
+    const ciclo = garantirEditavel(m.ciclo_id, m.departamento_id);
+    verificarPesos(m.ciclo_id, m.departamento_id, id, m.peso, m.colaborador_id);
     const campos = Object.keys(m);
     if (id) {
+      const mudou = campos.filter((c) => atual[c] !== m[c]);
+      if (!mudou.length) return apurarMeta(obterMeta(id));
+      const anteriores = Object.fromEntries(mudou.map((c) => [c, atual[c]]));
+      const propostos = Object.fromEntries(mudou.map((c) => [c, m[c]]));
+      const u = usuarioAtual();
+      if (ciclo.status === 'ativo') {
+        // Ciclo em andamento: alteração de regra exige justificativa e aprovação (versão pendente)
+        const justificativa = E.texto(dados.justificativa, 'justificativa');
+        E.exigir(justificativa, 'Ciclo ativo: informe a justificativa — a alteração ficará pendente de aprovação da diretoria');
+        E.exigir(!db.prepare(`SELECT 1 FROM met_alteracoes WHERE meta_id=? AND status='pendente'`).get(id), 'Já existe uma alteração pendente para esta meta');
+        const r = db.prepare(`INSERT INTO met_alteracoes (meta_id, anteriores, propostos, justificativa, status, solicitado_por, solicitado_por_id)
+            VALUES (?,?,?,?, 'pendente', ?, ?)`).run(id, JSON.stringify(anteriores), JSON.stringify(propostos), justificativa, u?.nome || 'sistema', u?.id ?? null);
+        audit('alteracao', Number(r.lastInsertRowid), 'solicitar', { meta: id, propostos, justificativa });
+        core.eventos.emit('metas.alteracao_solicitada', { meta: atual, justificativa });
+        return { ...apurarMeta(obterMeta(id)), alteracao_pendente: Number(r.lastInsertRowid) };
+      }
       db.prepare(`UPDATE met_metas SET ${campos.map((c) => c + '=?').join(',')} WHERE id=?`).run(...campos.map((c) => m[c]), id);
+      db.prepare(`INSERT INTO met_alteracoes (meta_id, anteriores, propostos, justificativa, status, solicitado_por, solicitado_por_id)
+          VALUES (?,?,?,?, 'aplicada', ?, ?)`).run(id, JSON.stringify(anteriores), JSON.stringify(propostos), E.texto(dados.justificativa, 'justificativa'), u?.nome || 'sistema', u?.id ?? null);
       audit('meta', id, 'atualizar', m);
       return apurarMeta(obterMeta(id));
     }
@@ -127,11 +170,52 @@ function criarMetasService(db, core, fonteIndicadores = null) {
   }
 
   function excluirMeta(id) {
-    core.exigirPerfil('diretoria');
     const m = obterMeta(id);
-    garantirEditavel(m.ciclo_id, m.departamento_id);
+    if (m.colaborador_id) core.garantirEditar(m.departamento_id); else core.exigirPerfil('diretoria');
+    const c = garantirEditavel(m.ciclo_id, m.departamento_id);
+    E.exigir(c.status === 'planejamento' || m.colaborador_id, 'Metas de departamento só podem ser excluídas com o ciclo em planejamento');
     db.prepare('DELETE FROM met_metas WHERE id=?').run(id);
     audit('meta', id, 'excluir');
+  }
+
+  // ---------------- Versionamento de metas ----------------
+  function listarAlteracoes({ meta_id, status } = {}) {
+    const cond = []; const args = [];
+    if (meta_id) { cond.push('a.meta_id=?'); args.push(Number(meta_id)); }
+    if (status) { cond.push('a.status=?'); args.push(status); }
+    const f = core.filtroEscopo('m.departamento_id');
+    return db.prepare(`SELECT a.*, m.nome AS meta, m.ciclo_id, d.nome AS departamento FROM met_alteracoes a JOIN met_metas m ON m.id=a.meta_id
+        JOIN departamentos d ON d.id=m.departamento_id WHERE 1=1 ${cond.length ? 'AND ' + cond.join(' AND ') : ''} ${f.sql} ORDER BY a.id DESC`).all(...args, ...f.args)
+      .map((a) => ({ ...a, anteriores: a.anteriores ? JSON.parse(a.anteriores) : null, propostos: JSON.parse(a.propostos) }));
+  }
+  function decidirAlteracao(id, aprovar, motivo) {
+    core.exigirPerfil('diretoria');
+    const a = db.prepare('SELECT * FROM met_alteracoes WHERE id=?').get(id);
+    if (!a) throw new E.NaoEncontrado('Alteração');
+    E.exigir(a.status === 'pendente', 'Esta alteração já foi decidida');
+    const u = usuarioAtual();
+    // Segregação de funções: quem solicitou não aprova (exceto administrador)
+    E.exigir(!u || u.perfil === 'admin' || u.id !== a.solicitado_por_id, 'Quem solicitou a alteração não pode aprová-la', 403);
+    return transacao(db, () => {
+      if (aprovar) {
+        const atual = db.prepare('SELECT * FROM met_metas WHERE id=?').get(a.meta_id);
+        const novo = { ...atual, ...JSON.parse(a.propostos) };
+        const erros = calc.validarMeta(novo);
+        if (erros.length) throw new E.ErroValidacao(erros.join('; '));
+        verificarPesos(novo.ciclo_id, novo.departamento_id, novo.id, novo.peso, novo.colaborador_id);
+        const campos = Object.keys(JSON.parse(a.propostos));
+        db.prepare(`UPDATE met_metas SET ${campos.map((c) => c + '=?').join(',')} WHERE id=?`).run(...campos.map((c) => novo[c]), a.meta_id);
+      } else {
+        E.exigir(String(motivo || '').trim(), 'Informe o motivo da rejeição');
+      }
+      db.prepare(`UPDATE met_alteracoes SET status=?, decidido_por=?, decidido_em=datetime('now'), motivo_decisao=? WHERE id=?`)
+        .run(aprovar ? 'aprovada' : 'rejeitada', u?.nome || 'sistema', motivo || null, id);
+      audit('alteracao', id, aprovar ? 'aprovar' : 'rejeitar', { meta: a.meta_id, motivo });
+      if (a.solicitado_por_id) core.eventos.emit('notificar', { usuarios: [a.solicitado_por_id], tipo: 'aprovacao',
+        titulo: `Alteração de meta ${aprovar ? 'aprovada' : 'rejeitada'}`, link: '#/metas/alteracoes',
+        mensagem: `Sua solicitação de alteração foi ${aprovar ? 'aprovada' : 'rejeitada'}${motivo ? ': ' + motivo : '.'}` });
+      return listarAlteracoes({ meta_id: a.meta_id })[0];
+    });
   }
 
   // ---------------- Resultados ----------------
@@ -198,13 +282,17 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     return (a2 - a1) * 12 + (m2 - m1) + 1;
   }
 
-  function listarMetas({ ciclo_id, departamento_id } = {}) {
+  function listarMetas({ ciclo_id, departamento_id, colaborador_id, individuais } = {}) {
     const cond = []; const args = [];
+    if (colaborador_id) { cond.push('m.colaborador_id=?'); args.push(Number(colaborador_id)); }
+    else if (individuais === 'todas') { /* sem filtro */ } else if (individuais) cond.push('m.colaborador_id IS NOT NULL');
+    else cond.push('m.colaborador_id IS NULL');
     if (ciclo_id) { cond.push('m.ciclo_id=?'); args.push(Number(ciclo_id)); }
     if (departamento_id) { cond.push('m.departamento_id=?'); args.push(Number(departamento_id)); }
     const f = core.filtroEscopo('m.departamento_id');
     if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
-    return db.prepare(`SELECT m.*, d.nome AS departamento FROM met_metas m JOIN departamentos d ON d.id=m.departamento_id
+    return db.prepare(`SELECT m.*, d.nome AS departamento, c.nome AS colaborador FROM met_metas m JOIN departamentos d ON d.id=m.departamento_id
+        LEFT JOIN met_colaboradores c ON c.id=m.colaborador_id
         ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY d.nome, m.peso DESC`).all(...args).map((m) => apurarMeta(m));
   }
 
@@ -226,15 +314,19 @@ function criarMetasService(db, core, fonteIndicadores = null) {
       if (!core.podeVer(b.departamento_id)) continue;
       if (!deptos.has(b.departamento_id)) deptos.set(b.departamento_id, { departamento_id: b.departamento_id, departamento: b.nome, metas: [] });
     }
+    const gatilho = calc.gatilhoCorporativo(ciclo);
     const departamentos = [...deptos.values()].map((d) => {
       const b = statusBonus(cicloId, d.departamento_id) || { valor_base: 0, status: 'aberto' };
-      return { ...d, ...calc.notaDepartamento(d.metas, { valor_base: b.valor_base, nota_minima: ciclo.nota_minima }),
+      const nd = calc.notaDepartamento(d.metas, { valor_base: b.valor_base, nota_minima: ciclo.nota_minima });
+      if (!gatilho.atingido) { nd.bonus = 0; nd.bloqueado_gatilho = true; }
+      return { ...d, ...nd,
         valor_base: b.valor_base, status_apuracao: b.status, aprovado_por: b.aprovado_por || null, aprovado_em: b.aprovado_em || null };
     }).sort((a, b) => a.departamento.localeCompare(b.departamento));
     const totalBase = departamentos.reduce((s, d) => s + d.valor_base, 0);
     const totalBonus = departamentos.reduce((s, d) => s + d.bonus, 0);
     return {
       ciclo: { id: ciclo.id, nome: ciclo.nome, inicio: ciclo.inicio, fim: ciclo.fim, status: ciclo.status, nota_minima: ciclo.nota_minima },
+      gatilho_corporativo: gatilho,
       departamentos,
       totais: {
         valor_base: totalBase,
@@ -270,7 +362,7 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     const [de, para] = fluxo[acao];
     if (de) E.exigir(b.status === de, `Só é possível ${acao} uma apuração com status "${de}" (atual: "${b.status}")`);
     if (acao === 'submeter') {
-      const pesos = db.prepare('SELECT COALESCE(SUM(peso),0) s FROM met_metas WHERE ciclo_id=? AND departamento_id=?').get(cicloId, deptoId).s;
+      const pesos = db.prepare('SELECT COALESCE(SUM(peso),0) s FROM met_metas WHERE ciclo_id=? AND departamento_id=? AND colaborador_id IS NULL').get(cicloId, deptoId).s;
       E.exigir(Math.abs(pesos - 100) < 0.001, `A soma dos pesos das metas deve ser 100% (atual: ${pesos}%)`);
     }
     const quem = usuario || usuarioAtual()?.nome || 'aprovador';
@@ -289,8 +381,11 @@ function criarMetasService(db, core, fonteIndicadores = null) {
     const ap = apurarCiclo(cicloId);
     const pendentes = ap.departamentos.filter((d) => d.status_apuracao !== 'aprovado').map((d) => d.departamento);
     E.exigir(!pendentes.length, `Há apurações não aprovadas: ${pendentes.join(', ')}`);
+    E.exigir(!ap.gatilho_corporativo.definido || ap.gatilho_corporativo.apurado, 'Informe o resultado do gatilho corporativo antes de encerrar o ciclo');
+    E.exigir(!db.prepare(`SELECT 1 FROM met_alteracoes a JOIN met_metas m ON m.id=a.meta_id WHERE m.ciclo_id=? AND a.status='pendente'`).get(cicloId),
+      'Há alterações de metas pendentes de decisão neste ciclo');
     return transacao(db, () => {
-      const snap = { ...ap, ciclo: { ...ap.ciclo, status: 'encerrado' } };
+      const snap = { ...ap, ciclo: { ...ap.ciclo, status: 'encerrado' }, individuais: extras.apurarIndividuais ? extras.apurarIndividuais(cicloId, ap) : [] };
       db.prepare(`UPDATE met_ciclos SET status='encerrado', encerrado_em=datetime('now'), snapshot=? WHERE id=?`).run(JSON.stringify(snap), cicloId);
       audit('ciclo', cicloId, 'encerrar', ap.totais);
       return apurarCiclo(cicloId);
@@ -325,7 +420,10 @@ function criarMetasService(db, core, fonteIndicadores = null) {
 
   core.registrarEntidade('metas', 'meta', (id) => db.prepare('SELECT departamento_id d FROM met_metas WHERE id=?').get(id)?.d);
 
+  const extras = {};
   return {
+    extras, db, apurarMeta, statusBonus, garantirEditavel,
+    listarAlteracoes, decidirAlteracao,
     listarCiclos, obterCiclo, salvarCiclo, encerrarCiclo,
     listarMetas, obterMeta: (id) => apurarMeta(obterMeta(id)), salvarMeta, excluirMeta,
     registrarResultado, excluirResultado,
