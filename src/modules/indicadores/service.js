@@ -2,10 +2,13 @@
 const { transacao } = require('../../db');
 const E = require('../../core/erros');
 const calc = require('./calculo');
+const { usuarioAtual } = require('../../core/contexto');
 
 const POLARIDADES = ['maior_melhor', 'menor_melhor', 'faixa'];
 const FREQUENCIAS = ['mensal', 'bimestral', 'trimestral', 'semestral', 'anual'];
-const TECNICAS = ['5w2h', '5porques', 'ishikawa'];
+const TECNICAS = ['5w2h', '5porques', 'ishikawa', 'pareto', 'a3', 'arvore'];
+const PERSPECTIVAS = ['financeira', 'clientes', 'processos', 'aprendizado'];
+const CAMPOS_A3 = ['contexto', 'situacao_atual', 'objetivo', 'analise_causa', 'contramedidas', 'plano_implementacao', 'acompanhamento'];
 const STATUS_PLANO = ['aberto', 'em_andamento', 'concluido', 'cancelado'];
 const STATUS_ACAO = ['pendente', 'em_andamento', 'concluida', 'cancelada'];
 const EFICACIA = ['pendente', 'eficaz', 'nao_eficaz'];
@@ -34,8 +37,16 @@ function criarIndicadoresService(db, core) {
       limite_inferior: E.numero(d.limite_inferior, 'limite_inferior'),
       limite_superior: E.numero(d.limite_superior, 'limite_superior'),
       ativo: d.ativo === undefined ? 1 : (d.ativo ? 1 : 0),
+      tipo: E.umDe(d.tipo, 'tipo', ['manual', 'calculado'], 'manual'),
+      formula_calculo: E.texto(d.formula_calculo, 'formula_calculo'),
+      objetivo_id: E.numero(d.objetivo_id, 'objetivo_id'),
     };
+    if (ind.perspectiva) E.umDe(ind.perspectiva, 'perspectiva', PERSPECTIVAS);
+    if (ind.objetivo_id) E.exigir(db.prepare('SELECT 1 FROM ind_objetivos WHERE id=?').get(ind.objetivo_id), 'Objetivo estratégico não encontrado');
+    if (ind.tipo === 'calculado') validarFormula(ind);
+    else ind.formula_calculo = null;
     core.obterDepartamento(ind.departamento_id);
+    core.garantirEditar(ind.departamento_id);
     const erros = calc.validarFaixa(ind);
     if (erros.length) throw new E.ErroValidacao(erros.join('; '));
     return ind;
@@ -61,6 +72,8 @@ function criarIndicadoresService(db, core) {
   function listar({ departamento_id, status, todos } = {}) {
     const cond = []; const args = [];
     if (!todos) cond.push('i.ativo = 1');
+    const f = core.filtroEscopo('i.departamento_id');
+    if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     if (departamento_id) { cond.push('i.departamento_id = ?'); args.push(Number(departamento_id)); }
     const lista = db.prepare(`SELECT i.*, d.nome AS departamento FROM ind_indicadores i
         JOIN departamentos d ON d.id = i.departamento_id
@@ -72,6 +85,7 @@ function criarIndicadoresService(db, core) {
     const ind = db.prepare(`SELECT i.*, d.nome AS departamento FROM ind_indicadores i
         JOIN departamentos d ON d.id = i.departamento_id WHERE i.id = ?`).get(id);
     if (!ind) throw new E.NaoEncontrado('Indicador');
+    core.garantirVer(ind.departamento_id);
     return enriquecer(ind);
   }
 
@@ -81,22 +95,36 @@ function criarIndicadoresService(db, core) {
       const dup = db.prepare('SELECT id FROM ind_indicadores WHERE codigo=? AND id IS NOT ?').get(ind.codigo, id ?? null);
       E.exigir(!dup, 'Já existe um indicador com esse código');
     }
+    if (ind.tipo === 'calculado' && id) E.exigir(!dependeDe(ind.formula_calculo, ind.codigo), 'A fórmula cria uma referência circular');
     const campos = Object.keys(ind);
     if (id) {
-      obter(id);
+      const antes = db.prepare('SELECT * FROM ind_indicadores WHERE id=?').get(id);
+      core.garantirEditar(obter(id).departamento_id);
+      const mudouRegra = ['meta', 'limite_inferior', 'limite_superior', 'polaridade', 'formula_calculo'].some((c) => antes[c] !== ind[c]);
+      const temMedicoes = db.prepare('SELECT COUNT(*) n FROM ind_medicoes WHERE indicador_id=?').get(id).n > 0;
+      const justificativa = E.texto(dados.justificativa, 'justificativa');
+      E.exigir(!(mudouRegra && temMedicoes) || justificativa, 'Informe a justificativa para alterar meta, range, polaridade ou fórmula de um indicador com histórico');
       db.prepare(`UPDATE ind_indicadores SET ${campos.map((c) => c + '=?').join(',')} WHERE id=?`)
         .run(...campos.map((c) => ind[c]), id);
-      audit('indicador', id, 'atualizar', ind);
+      const alterados = campos.filter((c) => antes[c] !== ind[c]);
+      if (alterados.length) {
+        db.prepare('INSERT INTO ind_versoes (indicador_id, dados_anteriores, dados_novos, justificativa, usuario) VALUES (?,?,?,?,?)')
+          .run(id, JSON.stringify(Object.fromEntries(alterados.map((c) => [c, antes[c]]))), JSON.stringify(Object.fromEntries(alterados.map((c) => [c, ind[c]]))),
+            justificativa, usuarioAtual()?.nome || 'sistema');
+      }
+      audit('indicador', id, 'atualizar', { ...ind, justificativa });
+      if (ind.tipo === 'calculado') recalcularIndicador(id);
       return obter(id);
     }
     const r = db.prepare(`INSERT INTO ind_indicadores (${campos.join(',')}) VALUES (${campos.map(() => '?').join(',')})`)
       .run(...campos.map((c) => ind[c]));
     audit('indicador', Number(r.lastInsertRowid), 'criar', ind);
+    if (ind.tipo === 'calculado') recalcularIndicador(Number(r.lastInsertRowid));
     return obter(Number(r.lastInsertRowid));
   }
 
   function excluir(id) {
-    obter(id);
+    core.garantirEditar(obter(id).departamento_id);
     db.prepare('DELETE FROM ind_indicadores WHERE id=?').run(id);
     audit('indicador', id, 'excluir');
   }
@@ -112,10 +140,19 @@ function criarIndicadoresService(db, core) {
   }
 
   /** Registra (ou substitui) o valor de um período. A meta/range vigentes são gravados como snapshot. */
-  function registrarMedicao(indicadorId, dados) {
-    const ind = obter(indicadorId);
+  /** Meta e range vigentes no período (considera metas sazonais). */
+  function metaVigente(ind, periodo) {
+    const mp = db.prepare('SELECT meta, limite_inferior, limite_superior FROM ind_metas_periodo WHERE indicador_id=? AND periodo=?').get(ind.id, periodo);
+    return mp ? { ...ind, ...mp, sazonal: true } : { ...ind, sazonal: false };
+  }
+
+  function registrarMedicao(indicadorId, dados, { interno = false } = {}) {
+    const indBase = obter(indicadorId);
+    core.garantirEditar(indBase.departamento_id);
+    E.exigir(interno || indBase.tipo !== 'calculado', 'Indicador calculado: o valor é obtido automaticamente pela fórmula');
     const periodo = E.periodo(dados.periodo);
     const valor = E.numero(dados.valor, 'valor', { obrigatorio: true });
+    const ind = metaVigente(indBase, periodo);
     const status = calc.classificar(ind, valor);
     const existente = db.prepare('SELECT id FROM ind_medicoes WHERE indicador_id=? AND periodo=?').get(indicadorId, periodo);
     const args = [valor, ind.meta, ind.limite_inferior, ind.limite_superior, status,
@@ -131,12 +168,15 @@ function criarIndicadoresService(db, core) {
     }
     audit('medicao', medId, existente ? 'atualizar' : 'criar', { indicadorId, periodo, valor, status });
     const med = db.prepare('SELECT * FROM ind_medicoes WHERE id=?').get(medId);
+    if (status === 'desvio') core.eventos.emit('indicadores.desvio', { indicador: ind, medicao: med });
+    if (indBase.codigo) recalcularDependentes(indBase.codigo, periodo);
     return { ...med, exige_analise: status === 'desvio' };
   }
 
   function excluirMedicao(medicaoId) {
-    const m = db.prepare('SELECT id FROM ind_medicoes WHERE id=?').get(medicaoId);
+    const m = db.prepare('SELECT id, indicador_id FROM ind_medicoes WHERE id=?').get(medicaoId);
     if (!m) throw new E.NaoEncontrado('Medição');
+    core.garantirEditar(obter(m.indicador_id).departamento_id);
     db.prepare('DELETE FROM ind_medicoes WHERE id=?').run(medicaoId);
     audit('medicao', medicaoId, 'excluir');
   }
@@ -155,6 +195,27 @@ function criarIndicadoresService(db, core) {
       E.exigir(porques.length >= 1 && porques.length <= 7, '5 Porquês: informe de 1 a 7 porquês');
       return { problema: String(c.problema).trim(), porques };
     }
+    if (tecnica === 'pareto') {
+      E.exigir(String(c.problema || '').trim(), 'Pareto: descreva o problema analisado');
+      const itens = (Array.isArray(c.itens) ? c.itens : []).map((i) => ({ causa: String(i.causa || '').trim(), frequencia: Number(i.frequencia) }))
+        .filter((i) => i.causa && Number.isFinite(i.frequencia) && i.frequencia > 0);
+      E.exigir(itens.length >= 2, 'Pareto: informe ao menos 2 causas com frequência');
+      return { problema: String(c.problema).trim(), itens: calc.pareto(itens) };
+    }
+    if (tecnica === 'a3') {
+      const out = Object.fromEntries(CAMPOS_A3.map((k) => [k, String(c[k] || '').trim()]));
+      for (const k of ['contexto', 'situacao_atual', 'analise_causa']) E.exigir(out[k], `A3: campo "${k}" é obrigatório`);
+      return out;
+    }
+    if (tecnica === 'arvore') {
+      E.exigir(String(c.evento_topo || '').trim(), 'Árvore de falhas: informe o evento topo');
+      const norm = (nos, nivel) => (Array.isArray(nos) ? nos : []).slice(0, 20).map((n) => ({
+        descricao: String(n.descricao || '').trim(), porta: n.porta === 'E' ? 'E' : 'OU',
+        filhos: nivel < 4 ? norm(n.filhos, nivel + 1) : [] })).filter((n) => n.descricao);
+      const causas = norm(c.causas, 1);
+      E.exigir(causas.length, 'Árvore de falhas: informe ao menos uma causa');
+      return { evento_topo: String(c.evento_topo).trim(), porta: c.porta === 'E' ? 'E' : 'OU', causas };
+    }
     // ishikawa
     E.exigir(String(c.problema || '').trim(), 'Ishikawa: descreva o efeito/problema');
     const out = { problema: String(c.problema).trim() };
@@ -171,6 +232,7 @@ function criarIndicadoresService(db, core) {
     const a = db.prepare(`SELECT a.*, m.periodo, m.valor, m.indicador_id FROM ind_analises a
         JOIN ind_medicoes m ON m.id = a.medicao_id WHERE a.id=?`).get(id);
     if (!a) throw new E.NaoEncontrado('Análise');
+    obter(a.indicador_id);
     return { ...a, conteudo: JSON.parse(a.conteudo) };
   }
 
@@ -182,10 +244,13 @@ function criarIndicadoresService(db, core) {
   function registrarAnalise(medicaoId, dados) {
     const med = db.prepare('SELECT * FROM ind_medicoes WHERE id=?').get(medicaoId);
     if (!med) throw new E.NaoEncontrado('Medição');
+    core.garantirEditar(obter(med.indicador_id).departamento_id);
     const tecnica = E.umDe(dados.tecnica, 'tecnica', TECNICAS);
     const conteudo = validarConteudo(tecnica, dados.conteudo);
     const causa = E.texto(dados.causa_raiz, 'causa_raiz')
-      || (tecnica === '5porques' ? conteudo.porques[conteudo.porques.length - 1] : null);
+      || (tecnica === '5porques' ? conteudo.porques[conteudo.porques.length - 1] : null)
+      || (tecnica === 'pareto' ? conteudo.itens.filter((i) => i.vital).map((i) => i.causa).join('; ') : null)
+      || (tecnica === 'a3' ? conteudo.analise_causa : null);
     const r = db.prepare('INSERT INTO ind_analises (medicao_id, tecnica, conteudo, causa_raiz, responsavel) VALUES (?,?,?,?,?)')
       .run(medicaoId, tecnica, JSON.stringify(conteudo), causa, E.texto(dados.responsavel, 'responsavel'));
     const id = Number(r.lastInsertRowid);
@@ -194,12 +259,21 @@ function criarIndicadoresService(db, core) {
   }
 
   function excluirAnalise(id) {
-    obterAnalise(id);
+    core.garantirEditar(obter(obterAnalise(id).indicador_id).departamento_id);
     db.prepare('DELETE FROM ind_analises WHERE id=?').run(id);
     audit('analise', id, 'excluir');
   }
 
   // ---------------- Planos de ação (5W2H) ----------------
+  function gut(d, atual = {}) {
+    const v = (k) => {
+      const x = d[k] === undefined ? atual[k] : E.numero(d[k], k);
+      E.exigir(x === null || x === undefined || (Number.isInteger(x) && x >= 1 && x <= 5), `GUT: "${k}" deve ser inteiro de 1 a 5`);
+      return x ?? null;
+    };
+    return { gravidade: v('gravidade'), urgencia: v('urgencia'), tendencia_gut: v('tendencia_gut') };
+  }
+
   function normalizarAcao(a) {
     return {
       o_que: E.texto(a.o_que, 'o_que (What)', { obrigatorio: true }),
@@ -223,12 +297,15 @@ function criarIndicadoresService(db, core) {
         FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id
         JOIN departamentos d ON d.id=i.departamento_id WHERE p.id=?`).get(id);
     if (!p) throw new E.NaoEncontrado('Plano de ação');
+    core.garantirVer(p.departamento_id);
     const acoes = db.prepare('SELECT * FROM ind_acoes WHERE plano_id=? ORDER BY quando, id').all(id).map(decorarAcao);
     const validas = acoes.filter((a) => a.status !== 'cancelada');
     const concl = validas.filter((a) => a.status === 'concluida').length;
     return {
       ...p,
       acoes,
+      prioridade: calc.prioridadeGut(p.gravidade, p.urgencia, p.tendencia_gut),
+      fase_pdca: calc.fasePdca(p),
       progresso: validas.length ? Math.round((concl / validas.length) * 100) : 0,
       acoes_atrasadas: acoes.filter((a) => a.atrasada).length,
       custo_total: acoes.reduce((s, a) => s + (a.status !== 'cancelada' ? a.quanto || 0 : 0), 0),
@@ -236,20 +313,23 @@ function criarIndicadoresService(db, core) {
     };
   }
 
-  function listarPlanos({ indicador_id, departamento_id, status, atrasados } = {}) {
+  function listarPlanos({ indicador_id, departamento_id, status, atrasados, ordem } = {}) {
     const cond = []; const args = [];
     if (indicador_id) { cond.push('p.indicador_id=?'); args.push(Number(indicador_id)); }
     if (departamento_id) { cond.push('i.departamento_id=?'); args.push(Number(departamento_id)); }
     if (status) { cond.push('p.status=?'); args.push(status); }
+    const f = core.filtroEscopo('i.departamento_id');
+    if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     let planos = db.prepare(`SELECT p.id FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id
         ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY p.id DESC`).all(...args).map((r) => obterPlano(r.id));
     if (atrasados === '1' || atrasados === true) planos = planos.filter((p) => p.acoes_atrasadas > 0);
+    if (ordem === 'gut') planos.sort((a, b) => (b.prioridade ?? -1) - (a.prioridade ?? -1));
     return planos;
   }
 
   function criarPlano(dados) {
     const indicadorId = E.numero(dados.indicador_id, 'indicador_id', { obrigatorio: true });
-    obter(indicadorId);
+    core.garantirEditar(obter(indicadorId).departamento_id);
     const analiseId = E.numero(dados.analise_id, 'analise_id');
     if (analiseId) {
       const a = obterAnalise(analiseId);
@@ -257,9 +337,10 @@ function criarIndicadoresService(db, core) {
     }
     const acoes = (Array.isArray(dados.acoes) ? dados.acoes : []).map(normalizarAcao);
     return transacao(db, () => {
-      const r = db.prepare('INSERT INTO ind_planos (indicador_id, analise_id, titulo, objetivo, responsavel, eficacia) VALUES (?,?,?,?,?,?)')
+      const g = gut(dados);
+      const r = db.prepare('INSERT INTO ind_planos (indicador_id, analise_id, titulo, objetivo, responsavel, eficacia, gravidade, urgencia, tendencia_gut) VALUES (?,?,?,?,?,?,?,?,?)')
         .run(indicadorId, analiseId, E.texto(dados.titulo, 'titulo', { obrigatorio: true }),
-          E.texto(dados.objetivo, 'objetivo'), E.texto(dados.responsavel, 'responsavel'), 'pendente');
+          E.texto(dados.objetivo, 'objetivo'), E.texto(dados.responsavel, 'responsavel'), 'pendente', g.gravidade, g.urgencia, g.tendencia_gut);
       const id = Number(r.lastInsertRowid);
       for (const a of acoes) inserirAcao(id, a);
       if (acoes.some((a) => a.status !== 'pendente')) db.prepare(`UPDATE ind_planos SET status='em_andamento' WHERE id=?`).run(id);
@@ -270,6 +351,7 @@ function criarIndicadoresService(db, core) {
 
   function atualizarPlano(id, dados) {
     const p = obterPlano(id);
+    core.garantirEditar(p.departamento_id);
     const status = E.umDe(dados.status, 'status', STATUS_PLANO, p.status);
     const eficacia = E.umDe(dados.eficacia, 'eficacia', EFICACIA, p.eficacia || 'pendente');
     if (eficacia !== 'pendente') E.exigir(status === 'concluido', 'A verificação de eficácia só pode ser registrada em planos concluídos');
@@ -282,12 +364,14 @@ function criarIndicadoresService(db, core) {
         E.texto(dados.responsavel ?? p.responsavel, 'responsavel'), status, eficacia,
         eficacia !== 'pendente' ? (E.data(dados.verificacao_data, 'verificacao_data') || hoje()) : null,
         E.texto(dados.verificacao_obs ?? p.verificacao_obs, 'verificacao_obs'), id);
-    audit('plano', id, 'atualizar', { status, eficacia });
+    const g = gut(dados, p);
+    db.prepare('UPDATE ind_planos SET gravidade=?, urgencia=?, tendencia_gut=? WHERE id=?').run(g.gravidade, g.urgencia, g.tendencia_gut, id);
+    audit('plano', id, 'atualizar', { status, eficacia, ...g });
     return obterPlano(id);
   }
 
   function excluirPlano(id) {
-    obterPlano(id);
+    core.garantirEditar(obterPlano(id).departamento_id);
     db.prepare('DELETE FROM ind_planos WHERE id=?').run(id);
     audit('plano', id, 'excluir');
   }
@@ -300,6 +384,7 @@ function criarIndicadoresService(db, core) {
 
   function adicionarAcao(planoId, dados) {
     const p = obterPlano(planoId);
+    core.garantirEditar(p.departamento_id);
     E.exigir(!['concluido', 'cancelado'].includes(p.status), 'Plano encerrado não aceita novas ações');
     const id = inserirAcao(planoId, normalizarAcao(dados));
     if (p.status === 'aberto') db.prepare(`UPDATE ind_planos SET status='em_andamento' WHERE id=?`).run(planoId);
@@ -310,6 +395,12 @@ function criarIndicadoresService(db, core) {
   function atualizarAcao(acaoId, dados) {
     const atual = db.prepare('SELECT * FROM ind_acoes WHERE id=?').get(acaoId);
     if (!atual) throw new E.NaoEncontrado('Ação');
+    const pl = obterPlano(atual.plano_id);
+    // O responsável pela ação (campo "quem") pode atualizar o status dela mesmo sem ser gestor
+    const u = usuarioAtual();
+    const ehResponsavel = u && atual.quem && atual.quem.toLowerCase().includes(u.nome.toLowerCase());
+    if (ehResponsavel) dados = { status: dados.status };
+    else core.garantirEditar(pl.departamento_id);
     const a = normalizarAcao({ ...atual, ...dados });
     const concluidaEm = a.status === 'concluida' ? (atual.concluida_em || hoje()) : null;
     db.prepare(`UPDATE ind_acoes SET o_que=?, por_que=?, onde=?, quando=?, quem=?, como=?, quanto=?, status=?, concluida_em=? WHERE id=?`)
@@ -323,9 +414,129 @@ function criarIndicadoresService(db, core) {
   function excluirAcao(acaoId) {
     const atual = db.prepare('SELECT * FROM ind_acoes WHERE id=?').get(acaoId);
     if (!atual) throw new E.NaoEncontrado('Ação');
+    core.garantirEditar(obterPlano(atual.plano_id).departamento_id);
     db.prepare('DELETE FROM ind_acoes WHERE id=?').run(acaoId);
     audit('acao', acaoId, 'excluir');
     return obterPlano(atual.plano_id);
+  }
+
+  // ---------------- Indicadores calculados ----------------
+  const porCodigo = (codigo) => db.prepare('SELECT * FROM ind_indicadores WHERE codigo=?').get(codigo);
+  function validarFormula(ind) {
+    E.exigir(ind.formula_calculo, 'Indicador calculado exige fórmula (ex.: {COD-1} / {COD-2} * 100)');
+    let refs;
+    try { calc.analisarFormula(ind.formula_calculo); refs = calc.referencias(ind.formula_calculo); } catch (e) { throw new E.ErroValidacao(`Fórmula inválida: ${e.message}`); }
+    E.exigir(refs.length, 'A fórmula deve referenciar ao menos um indicador pelo código, ex.: {COM-01}');
+    for (const r of refs) {
+      E.exigir(r !== ind.codigo, 'A fórmula não pode referenciar o próprio indicador');
+      E.exigir(porCodigo(r), `Indicador "${r}" usado na fórmula não existe`);
+    }
+  }
+  /** true se a fórmula depende (direta ou indiretamente) do código informado. */
+  function dependeDe(formula, codigo, visitados = new Set()) {
+    if (!codigo || !formula) return false;
+    for (const r of calc.referencias(formula)) {
+      if (r === codigo) return true;
+      if (visitados.has(r)) continue;
+      visitados.add(r);
+      const dep = porCodigo(r);
+      if (dep?.tipo === 'calculado' && dependeDe(dep.formula_calculo, codigo, visitados)) return true;
+    }
+    return false;
+  }
+  function calcularPeriodo(ind, periodo) {
+    const valores = {};
+    for (const r of calc.referencias(ind.formula_calculo)) {
+      valores[r] = db.prepare('SELECT m.valor FROM ind_medicoes m JOIN ind_indicadores i ON i.id=m.indicador_id WHERE i.codigo=? AND m.periodo=?').get(r, periodo)?.valor ?? null;
+    }
+    return calc.avaliarFormula(ind.formula_calculo, valores);
+  }
+  function gravarCalculado(ind, periodo) {
+    const v = calcularPeriodo(ind, periodo);
+    if (v === null) return;
+    registrarMedicao(ind.id, { periodo, valor: v, comentario: 'Calculado automaticamente', registrado_por: 'sistema' }, { interno: true });
+  }
+  /** Recalcula todos os períodos de um indicador calculado. */
+  function recalcularIndicador(id) {
+    const ind = db.prepare('SELECT * FROM ind_indicadores WHERE id=?').get(id);
+    const refs = calc.referencias(ind.formula_calculo);
+    const periodos = db.prepare(`SELECT DISTINCT m.periodo FROM ind_medicoes m JOIN ind_indicadores i ON i.id=m.indicador_id
+        WHERE i.codigo IN (${refs.map(() => '?').join(',')}) ORDER BY m.periodo`).all(...refs).map((r) => r.periodo);
+    for (const p of periodos) gravarCalculado(ind, p);
+  }
+  /** Ao lançar o valor de um indicador, recalcula os calculados que dependem dele naquele período. */
+  function recalcularDependentes(codigo, periodo) {
+    const deps = db.prepare(`SELECT * FROM ind_indicadores WHERE tipo='calculado' AND ativo=1 AND formula_calculo LIKE ?`).all(`%{${codigo}}%`)
+      .filter((d) => calc.referencias(d.formula_calculo).includes(codigo));
+    for (const d of deps) gravarCalculado(d, periodo);
+  }
+
+  // ---------------- Metas por período (sazonalidade) ----------------
+  function listarMetasPeriodo(indicadorId) {
+    obter(indicadorId);
+    return db.prepare('SELECT * FROM ind_metas_periodo WHERE indicador_id=? ORDER BY periodo').all(indicadorId);
+  }
+  function salvarMetaPeriodo(indicadorId, d) {
+    const ind = obter(indicadorId);
+    core.garantirEditar(ind.departamento_id);
+    const periodo = E.periodo(d.periodo);
+    const mp = { polaridade: ind.polaridade, meta: E.numero(d.meta, 'meta', { obrigatorio: true }),
+      limite_inferior: E.numero(d.limite_inferior, 'limite_inferior'), limite_superior: E.numero(d.limite_superior, 'limite_superior') };
+    const erros = calc.validarFaixa(mp);
+    if (erros.length) throw new E.ErroValidacao(erros.join('; '));
+    db.prepare(`INSERT INTO ind_metas_periodo (indicador_id, periodo, meta, limite_inferior, limite_superior) VALUES (?,?,?,?,?)
+        ON CONFLICT(indicador_id, periodo) DO UPDATE SET meta=excluded.meta, limite_inferior=excluded.limite_inferior, limite_superior=excluded.limite_superior`)
+      .run(indicadorId, periodo, mp.meta, mp.limite_inferior, mp.limite_superior);
+    audit('meta_periodo', indicadorId, 'definir', { periodo, ...mp });
+    // Reclassifica a medição já existente do período com a nova meta
+    const med = db.prepare('SELECT valor, comentario, registrado_por FROM ind_medicoes WHERE indicador_id=? AND periodo=?').get(indicadorId, periodo);
+    if (med) registrarMedicao(indicadorId, { periodo, ...med }, { interno: true });
+    return listarMetasPeriodo(indicadorId);
+  }
+  function excluirMetaPeriodo(indicadorId, periodo) {
+    core.garantirEditar(obter(indicadorId).departamento_id);
+    db.prepare('DELETE FROM ind_metas_periodo WHERE indicador_id=? AND periodo=?').run(indicadorId, periodo);
+    return listarMetasPeriodo(indicadorId);
+  }
+
+  const listarVersoes = (indicadorId) => { obter(indicadorId); return db.prepare('SELECT * FROM ind_versoes WHERE indicador_id=? ORDER BY id DESC').all(indicadorId)
+    .map((v) => ({ ...v, dados_anteriores: JSON.parse(v.dados_anteriores), dados_novos: JSON.parse(v.dados_novos) })); };
+
+  // ---------------- CEP ----------------
+  function cartaControle(indicadorId) {
+    obter(indicadorId);
+    const meds = db.prepare('SELECT periodo, valor FROM ind_medicoes WHERE indicador_id=? ORDER BY periodo').all(indicadorId);
+    const c = calc.cep(meds.map((m) => m.valor));
+    return { ...c, pontos: c.pontos.map((p, i) => ({ ...p, periodo: meds[i].periodo })) };
+  }
+
+  // ---------------- Mapa estratégico (BSC) ----------------
+  function salvarObjetivo(d, id) {
+    core.exigirPerfil('diretoria');
+    const o = { perspectiva: E.umDe(d.perspectiva, 'perspectiva', PERSPECTIVAS), nome: E.texto(d.nome, 'nome', { obrigatorio: true }),
+      descricao: E.texto(d.descricao, 'descricao'), ordem: E.numero(d.ordem, 'ordem') ?? 0 };
+    let oid = id;
+    if (id) db.prepare('UPDATE ind_objetivos SET perspectiva=?, nome=?, descricao=?, ordem=? WHERE id=?').run(o.perspectiva, o.nome, o.descricao, o.ordem, id);
+    else oid = Number(db.prepare('INSERT INTO ind_objetivos (perspectiva, nome, descricao, ordem) VALUES (?,?,?,?)').run(o.perspectiva, o.nome, o.descricao, o.ordem).lastInsertRowid);
+    if (Array.isArray(d.contribui_para)) {
+      db.prepare('DELETE FROM ind_objetivos_relacoes WHERE origem_id=?').run(oid);
+      for (const dest of d.contribui_para.map(Number).filter((x) => x && x !== oid)) db.prepare('INSERT OR IGNORE INTO ind_objetivos_relacoes VALUES (?,?)').run(oid, dest);
+    }
+    audit('objetivo', oid, id ? 'atualizar' : 'criar', o);
+    return mapaEstrategico();
+  }
+  function excluirObjetivo(id) { core.exigirPerfil('diretoria'); db.prepare('DELETE FROM ind_objetivos WHERE id=?').run(id); audit('objetivo', id, 'excluir'); }
+  function mapaEstrategico() {
+    const inds = listar();
+    const objetivos = db.prepare('SELECT * FROM ind_objetivos ORDER BY ordem, id').all().map((o) => {
+      const meus = inds.filter((i) => i.objetivo_id === o.id);
+      const st = meus.map((i) => i.ultima_medicao?.status).filter(Boolean);
+      const situacao = !st.length ? 'sem_medicao' : st.includes('desvio') ? 'desvio' : st.includes('atencao') ? 'atencao' : 'atingido';
+      return { ...o, situacao, contribui_para: db.prepare('SELECT destino_id FROM ind_objetivos_relacoes WHERE origem_id=?').all(o.id).map((r) => r.destino_id),
+        indicadores: meus.map((i) => ({ id: i.id, codigo: i.codigo, nome: i.nome, status: i.ultima_medicao?.status || 'sem_medicao', departamento: i.departamento })) };
+    });
+    return { perspectivas: PERSPECTIVAS.map((p) => ({ perspectiva: p, objetivos: objetivos.filter((o) => o.perspectiva === p) })),
+      sem_objetivo: inds.filter((i) => !i.objetivo_id).length };
   }
 
   // ---------------- Painel / alertas ----------------
@@ -336,6 +547,10 @@ function criarIndicadoresService(db, core) {
     const planos = listarPlanos();
     const alertas = [];
     for (const i of inds) {
+      const serie = db.prepare('SELECT valor FROM ind_medicoes WHERE indicador_id=? ORDER BY periodo').all(i.id).map((m) => m.valor);
+      const c = calc.cep(serie.slice(-24));
+      if (c.ultimo_instavel) alertas.push({ tipo: 'instabilidade', gravidade: 'media', indicador_id: i.id,
+        mensagem: `${i.nome}: último valor indica processo fora de controle estatístico (${c.pontos.at(-1).sinais.join(', ')})` });
       if (i.analises_pendentes) alertas.push({ tipo: 'analise_pendente', gravidade: 'alta', indicador_id: i.id,
         mensagem: `${i.nome}: ${i.analises_pendentes} desvio(s) sem análise de causa` });
     }
@@ -381,7 +596,17 @@ function criarIndicadoresService(db, core) {
     },
   };
 
+  // Permite que comentários/anexos do núcleo saibam a qual departamento cada registro pertence
+  const deptoInd = (id) => db.prepare('SELECT departamento_id d FROM ind_indicadores WHERE id=?').get(id)?.d;
+  core.registrarEntidade('indicadores', 'indicador', deptoInd);
+  core.registrarEntidade('indicadores', 'medicao', (id) => deptoInd(db.prepare('SELECT indicador_id i FROM ind_medicoes WHERE id=?').get(id)?.i));
+  core.registrarEntidade('indicadores', 'analise', (id) => deptoInd(db.prepare('SELECT m.indicador_id i FROM ind_analises a JOIN ind_medicoes m ON m.id=a.medicao_id WHERE a.id=?').get(id)?.i));
+  core.registrarEntidade('indicadores', 'plano', (id) => deptoInd(db.prepare('SELECT indicador_id i FROM ind_planos WHERE id=?').get(id)?.i));
+
   return {
+    db, metaVigente, recalcularIndicador, porCodigo,
+    listarMetasPeriodo, salvarMetaPeriodo, excluirMetaPeriodo, listarVersoes, cartaControle,
+    salvarObjetivo, excluirObjetivo, mapaEstrategico,
     listar, obter, salvar, excluir,
     listarMedicoes, registrarMedicao, excluirMedicao,
     listarAnalises, obterAnalise, registrarAnalise, excluirAnalise,
@@ -391,4 +616,4 @@ function criarIndicadoresService(db, core) {
   };
 }
 
-module.exports = { criarIndicadoresService, POLARIDADES, TECNICAS, CATEGORIAS_6M };
+module.exports = { criarIndicadoresService, POLARIDADES, TECNICAS, CATEGORIAS_6M, PERSPECTIVAS, CAMPOS_A3 };

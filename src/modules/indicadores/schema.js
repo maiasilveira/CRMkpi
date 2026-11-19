@@ -1,7 +1,7 @@
 'use strict';
+const { aplicarMigracoes, addColuna } = require('../../core/migracoes');
 // Tabelas exclusivas do módulo Indicadores (prefixo ind_).
-module.exports = function migrarIndicadores(db) {
-  db.exec(`
+const V1 = `
     CREATE TABLE IF NOT EXISTS ind_indicadores (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       codigo TEXT UNIQUE,
@@ -73,5 +73,65 @@ module.exports = function migrarIndicadores(db) {
     );
     CREATE INDEX IF NOT EXISTS ix_ind_med ON ind_medicoes(indicador_id, periodo);
     CREATE INDEX IF NOT EXISTS ix_ind_acao_plano ON ind_acoes(plano_id);
-  `);
+  `;
+
+const PASSOS = [
+  V1,
+  // v2 — indicadores calculados, mapa estratégico, metas por período, versões, integrações, GUT
+  (db) => {
+    addColuna(db, 'ind_indicadores', 'tipo', "TEXT NOT NULL DEFAULT 'manual'");  // manual | calculado
+    addColuna(db, 'ind_indicadores', 'formula_calculo', 'TEXT');                  // ex.: {COM-01} / {COM-02} * 100
+    addColuna(db, 'ind_indicadores', 'objetivo_id', 'INTEGER REFERENCES ind_objetivos(id) ON DELETE SET NULL');
+    addColuna(db, 'ind_planos', 'gravidade', 'INTEGER');
+    addColuna(db, 'ind_planos', 'urgencia', 'INTEGER');
+    addColuna(db, 'ind_planos', 'tendencia_gut', 'INTEGER');
+    db.exec(`
+      CREATE TABLE ind_objetivos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        perspectiva TEXT NOT NULL,            -- financeira | clientes | processos | aprendizado
+        nome TEXT NOT NULL,
+        descricao TEXT,
+        ordem INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE ind_objetivos_relacoes (   -- relações de causa e efeito do mapa estratégico
+        origem_id INTEGER NOT NULL REFERENCES ind_objetivos(id) ON DELETE CASCADE,
+        destino_id INTEGER NOT NULL REFERENCES ind_objetivos(id) ON DELETE CASCADE,
+        PRIMARY KEY (origem_id, destino_id)
+      );
+      CREATE TABLE ind_metas_periodo (        -- sazonalidade: meta/range específicos de um período
+        indicador_id INTEGER NOT NULL REFERENCES ind_indicadores(id) ON DELETE CASCADE,
+        periodo TEXT NOT NULL,
+        meta REAL NOT NULL,
+        limite_inferior REAL,
+        limite_superior REAL,
+        PRIMARY KEY (indicador_id, periodo)
+      );
+      CREATE TABLE ind_versoes (              -- histórico de alterações da ficha do indicador
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        indicador_id INTEGER NOT NULL REFERENCES ind_indicadores(id) ON DELETE CASCADE,
+        dados_anteriores TEXT NOT NULL,
+        dados_novos TEXT NOT NULL,
+        justificativa TEXT,
+        usuario TEXT,
+        criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE ind_integracoes (          -- coleta automática de valores via HTTP/JSON
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        indicador_id INTEGER NOT NULL UNIQUE REFERENCES ind_indicadores(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        cabecalhos TEXT,                      -- JSON
+        caminho TEXT NOT NULL,                -- caminho no JSON, ex.: data.total
+        periodo_ref TEXT NOT NULL DEFAULT 'anterior', -- anterior | atual
+        ativo INTEGER NOT NULL DEFAULT 1,
+        ultima_execucao TEXT,
+        ultimo_status TEXT
+      );
+    `);
+  },
+];
+
+module.exports = function migrarIndicadores(db) {
+  aplicarMigracoes(db, 'indicadores', PASSOS);
 };
+module.exports.PASSOS = PASSOS;
+void addColuna;

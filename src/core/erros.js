@@ -5,7 +5,7 @@ class ErroValidacao extends Error {
 class NaoEncontrado extends ErroValidacao {
   constructor(o = 'Registro') { super(`${o} não encontrado`, 404); }
 }
-function exigir(cond, msg) { if (!cond) throw new ErroValidacao(msg); }
+function exigir(cond, msg, status = 400) { if (!cond) throw new ErroValidacao(msg, status); }
 function numero(v, campo, { obrigatorio = false } = {}) {
   if (v === undefined || v === null || v === '') {
     if (obrigatorio) throw new ErroValidacao(`Campo "${campo}" é obrigatório`);

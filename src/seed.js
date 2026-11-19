@@ -7,16 +7,33 @@ const { criarApp } = require('./app');
 const arquivo = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'kpi.db');
 for (const suf of ['', '-wal', '-shm']) fs.rmSync(arquivo + suf, { force: true });
 
-const { core, modulos } = criarApp({ dbFile: arquivo });
+const { core, modulos, colaboracao, encerrar } = criarApp({ dbFile: arquivo, semAgendador: true });
 const ind = modulos.indicadores.service;
 const met = modulos.metas.service;
 
+const empresa = core.salvarDepartamento({ nome: 'Empresa Demo S.A.', sigla: 'EMP', tipo: 'empresa', gestor: 'Helena Prado' });
+const dirCom = core.salvarDepartamento({ nome: 'Diretoria Comercial', sigla: 'DCOM', tipo: 'diretoria', pai_id: empresa.id, gestor: 'Ana Souza' });
+const dirOps = core.salvarDepartamento({ nome: 'Diretoria de Operações', sigla: 'DOPS', tipo: 'diretoria', pai_id: empresa.id, gestor: 'Bruno Lima' });
+const dirAdm = core.salvarDepartamento({ nome: 'Diretoria Administrativa', sigla: 'DADM', tipo: 'diretoria', pai_id: empresa.id, gestor: 'Carla Mendes' });
 const deptos = Object.fromEntries([
-  ['Comercial', 'COM', 'Ana Souza'],
-  ['Operações', 'OPS', 'Bruno Lima'],
-  ['Financeiro', 'FIN', 'Carla Mendes'],
-  ['Recursos Humanos', 'RH', 'Diego Rocha'],
-].map(([nome, sigla, gestor]) => [sigla, core.salvarDepartamento({ nome, sigla, gestor }).id]));
+  ['Comercial', 'COM', 'Ana Souza', dirCom.id],
+  ['Operações', 'OPS', 'Bruno Lima', dirOps.id],
+  ['Financeiro', 'FIN', 'Carla Mendes', dirAdm.id],
+  ['Recursos Humanos', 'RH', 'Diego Rocha', dirAdm.id],
+].map(([nome, sigla, gestor, pai]) => [sigla, core.salvarDepartamento({ nome, sigla, gestor, pai_id: pai }).id]));
+
+// Usuários de demonstração (senha: demo1234)
+const SENHA = 'demo1234';
+const usuarios = [
+  ['Administrador', 'admin@demo.com', 'admin', null],
+  ['Helena Prado', 'diretoria@demo.com', 'diretoria', null],
+  ['Ana Souza', 'ana@demo.com', 'gestor', deptos.COM],
+  ['Bruno Lima', 'bruno@demo.com', 'gestor', deptos.OPS],
+  ['Carla Mendes', 'carla@demo.com', 'gestor', deptos.FIN],
+  ['Diego Rocha', 'diego@demo.com', 'gestor', deptos.RH],
+  ['Eduardo Reis', 'eduardo@demo.com', 'colaborador', deptos.COM],
+].map(([nome, email, perfil, departamento_id]) => core.salvarUsuario({ nome, email, perfil, departamento_id, senha: SENHA }, null, { bootstrap: true }));
+void usuarios;
 
 const ano = new Date().getFullYear();
 const mesAtual = new Date().getMonth() + 1;
@@ -34,12 +51,33 @@ const defs = [
   { codigo: 'RH-02', nome: 'Horas de treinamento por colaborador', departamento_id: deptos.RH, unidade: 'h', perspectiva: 'aprendizado', polaridade: 'maior_melhor', meta: 4, limite_inferior: 3, responsavel: 'Diego Rocha', serie: [3.2, 3.8, 4.1, 4.5, 2.6, 3.9, 4.2, 4.4, 4.0, 4.6, 4.8] },
 ];
 
+const ind0 = modulos.indicadores.service;
+const obj = {};
+for (const [k, perspectiva, nome, contribui] of [
+  ['lucro', 'financeira', 'Crescer com rentabilidade', []],
+  ['caixa', 'financeira', 'Preservar o caixa', []],
+  ['cliente', 'clientes', 'Conquistar e reter clientes', ['lucro']],
+  ['entrega', 'processos', 'Entregar com qualidade e no prazo', ['cliente']],
+  ['eficiencia', 'processos', 'Operar com eficiência', ['lucro', 'caixa']],
+  ['pessoas', 'aprendizado', 'Desenvolver e reter talentos', ['entrega', 'eficiencia']],
+]) {
+  const mapa = ind0.salvarObjetivo({ perspectiva, nome, contribui_para: contribui.map((c) => obj[c]) });
+  obj[k] = mapa.perspectivas.flatMap((p) => p.objetivos).find((o) => o.nome === nome).id;
+}
+const objetivoDe = { 'COM-01': 'lucro', 'COM-02': 'cliente', 'OPS-01': 'entrega', 'OPS-02': 'eficiencia', 'OPS-03': 'entrega', 'FIN-01': 'caixa', 'FIN-02': 'eficiencia', 'RH-01': 'pessoas', 'RH-02': 'pessoas' };
+
 const criados = {};
 for (const { serie, ...d } of defs) {
-  const i = ind.salvar(d);
+  const i = ind.salvar({ ...d, objetivo_id: obj[objetivoDe[d.codigo]] });
   criados[d.codigo] = i;
   meses.forEach((p, k) => ind.registrarMedicao(i.id, { periodo: p, valor: serie[k % serie.length], registrado_por: d.responsavel }));
 }
+
+// Meta sazonal: dezembro tem meta de receita maior
+ind.salvarMetaPeriodo(criados['COM-01'].id, { periodo: `${ano}-12`, meta: 1500, limite_inferior: 1400 });
+// Indicador calculado a partir de outros (custo da má qualidade estimado)
+ind.salvar({ codigo: 'OPS-04', nome: 'Receita por ponto de refugo', departamento_id: deptos.OPS, unidade: 'R$ mil', perspectiva: 'processos',
+  polaridade: 'maior_melhor', meta: 500, limite_inferior: 400, tipo: 'calculado', formula_calculo: '{COM-01} / {OPS-02}', responsavel: 'Bruno Lima', objetivo_id: obj.eficiencia });
 
 // Análises e planos de exemplo
 const medOps = ind.listarMedicoes(criados['OPS-02'].id).find((m) => m.status === 'desvio');
@@ -52,7 +90,7 @@ if (medOps) {
       material: ['Lote de matéria-prima fora de especificação'], mao_de_obra: ['Operador novo sem treinamento'],
       medicao: ['Calibração do paquímetro vencida'], meio_ambiente: [] },
   });
-  const plano = ind.criarPlano({ indicador_id: criados['OPS-02'].id, analise_id: a.id, titulo: 'Redução do refugo na linha 2',
+  const plano = ind.criarPlano({ indicador_id: criados['OPS-02'].id, analise_id: a.id, titulo: 'Redução do refugo na linha 2', gravidade: 4, urgencia: 4, tendencia_gut: 3,
     objetivo: 'Retornar o refugo para ≤ 2%', responsavel: 'Bruno Lima',
     acoes: [
       { o_que: 'Implantar troca preventiva do ferramental', por_que: 'Eliminar causa raiz do desgaste', onde: 'Linha 2', quando: `${ano}-03-15`, quem: 'Equipe de manutenção', como: 'Plano de manutenção a cada 20 mil ciclos', quanto: 8500, status: 'concluida' },
@@ -71,7 +109,7 @@ if (medFin) {
       'Consulta de crédito é manual e feita apenas no cadastro',
       'Ausência de processo de revisão periódica de limites'] },
   });
-  ind.criarPlano({ indicador_id: criados['FIN-01'].id, analise_id: a.id, titulo: 'Revisão da política de crédito',
+  ind.criarPlano({ indicador_id: criados['FIN-01'].id, analise_id: a.id, titulo: 'Revisão da política de crédito', gravidade: 5, urgencia: 4, tendencia_gut: 4,
     responsavel: 'Carla Mendes', objetivo: 'Inadimplência ≤ 3%',
     acoes: [
       { o_que: 'Automatizar consulta de score trimestral', por_que: 'Revisar limites com dados atualizados', onde: 'ERP', quando: `${ano}-08-30`, quem: 'TI + Financeiro', como: 'Integração com bureau de crédito', quanto: 15000, status: 'em_andamento' },
@@ -86,7 +124,10 @@ if (medTemp) {
 }
 
 // Metas bonificáveis
-const ciclo = met.salvarCiclo({ nome: `PLR ${ano}`, inicio: `${ano}-01`, fim: `${ano}-12`, status: 'ativo', nota_minima: 60 });
+const regras = { nome: `PLR ${ano}`, inicio: `${ano}-01`, fim: `${ano}-12`, nota_minima: 60, gatilho_corp_descricao: 'EBITDA anual (R$ milhões)', gatilho_corp_minimo: 12,
+  peso_departamento_padrao: 70, dias_minimos_mes: 15, redutor_falta_pct: 5, redutor_advertencia_pct: 10, redutor_maximo_pct: 50 };
+const ciclo = met.salvarCiclo({ ...regras, status: 'planejamento' });
+const metaEmpresa = met.salvarMeta({ ciclo_id: ciclo.id, departamento_id: empresa.id, nome: 'EBITDA da empresa', unidade: 'R$ mi', polaridade: 'maior_melhor', peso: 100, gatilho: 12, alvo: 15, superacao: 18 });
 const metasDef = [
   { departamento_id: deptos.COM, nome: 'Receita acumulada', unidade: 'R$ mil', polaridade: 'maior_melhor', peso: 50, gatilho: 12000, alvo: 13500, superacao: 15000, fonte: 'indicador', indicador_id: criados['COM-01'].id, agregacao: 'soma' },
   { departamento_id: deptos.COM, nome: 'Conversão média de propostas', unidade: '%', polaridade: 'maior_melhor', peso: 30, gatilho: 26, alvo: 30, superacao: 34, fonte: 'indicador', indicador_id: criados['COM-02'].id, agregacao: 'media' },
@@ -98,7 +139,8 @@ const metasDef = [
   { departamento_id: deptos.RH, nome: 'Turnover médio', unidade: '%', polaridade: 'menor_melhor', peso: 60, gatilho: 2, alvo: 1.5, superacao: 1.2, fonte: 'indicador', indicador_id: criados['RH-01'].id, agregacao: 'media' },
   { departamento_id: deptos.RH, nome: 'Clima organizacional', unidade: '%', polaridade: 'maior_melhor', peso: 40, gatilho: 70, alvo: 80, superacao: 90, fonte: 'manual' },
 ];
-const metas = metasDef.map((m) => met.salvarMeta({ ...m, ciclo_id: ciclo.id, responsavel: core.obterDepartamento(m.departamento_id).gestor }));
+const metas = metasDef.map((m) => met.salvarMeta({ ...m, ciclo_id: ciclo.id, meta_pai_id: metaEmpresa.id, responsavel: core.obterDepartamento(m.departamento_id).gestor }));
+met.registrarResultado(metaEmpresa.id, { periodo: `${ano}-09`, valor: 13.8, observacao: 'Projeção do controller' });
 const ultimo = meses[meses.length - 1];
 met.registrarResultado(metas[2].id, { periodo: ultimo, valor: 68, observacao: 'Pesquisa semestral' });
 met.registrarResultado(metas[5].id, { periodo: ultimo, valor: 4.2 });
@@ -106,5 +148,35 @@ met.registrarResultado(metas[8].id, { periodo: ultimo, valor: 77, observacao: 'P
 for (const [s, v] of [['COM', 120000], ['OPS', 90000], ['FIN', 60000], ['RH', 45000]]) met.definirBonus(ciclo.id, deptos[s], { valor_base: v });
 met.transicionar(ciclo.id, deptos.OPS, 'submeter', 'Bruno Lima');
 
+// Colaboradores, participação e metas individuais
+const pessoas = modulos.metas.pessoas;
+const colabs = [
+  ['1001', 'Ana Souza', 'ana@demo.com', 'COM', 'Gerente comercial', 18000, '2019-03-01'],
+  ['1002', 'Eduardo Reis', 'eduardo@demo.com', 'COM', 'Executivo de contas', 9000, `${ano}-04-10`],
+  ['1003', 'Fernanda Luz', null, 'COM', 'Executiva de contas', 9500, '2021-06-01'],
+  ['2001', 'Bruno Lima', 'bruno@demo.com', 'OPS', 'Gerente industrial', 17000, '2018-01-15'],
+  ['2002', 'Gustavo Alves', null, 'OPS', 'Supervisor de produção', 8000, '2020-02-01'],
+  ['3001', 'Carla Mendes', 'carla@demo.com', 'FIN', 'Gerente financeira', 16000, '2017-05-01'],
+  ['4001', 'Diego Rocha', 'diego@demo.com', 'RH', 'Gerente de RH', 15000, '2016-09-01'],
+].map(([matricula, nome, email, dep, cargo, salario, admissao]) => pessoas.salvarColaborador({ matricula, nome, email, departamento_id: deptos[dep], cargo, salario, admissao }));
+pessoas.incluirTodos(ciclo.id, 2);
+pessoas.salvarParticipacao(ciclo.id, colabs[0].id, { multiplo_salarios: 3, peso_departamento: 60 });
+pessoas.salvarParticipacao(ciclo.id, colabs[4].id, { multiplo_salarios: 2, faltas: 2, advertencias: 1 });
+const mInd = met.salvarMeta({ ciclo_id: ciclo.id, colaborador_id: colabs[1].id, nome: 'Novos clientes conquistados', unidade: 'clientes', polaridade: 'maior_melhor',
+  peso: 100, gatilho: 8, alvo: 12, superacao: 16, agregacao: 'soma', meta_pai_id: metas[0].id });
+for (const [m, v] of [[`${ano}-05`, 2], [`${ano}-06`, 3], [`${ano}-07`, 2], [`${ano}-08`, 3]]) met.registrarResultado(mInd.id, { periodo: m, valor: v });
+
+// Ciclo entra em vigor: a partir daqui, alterações de metas exigem aprovação
+met.salvarCiclo({ ...regras, status: 'ativo', gatilho_corp_resultado: 13.8 }, ciclo.id);
+met.salvarMeta({ ...metas[5], justificativa: 'Corte de orçamento aprovado em comitê: meta de redução de despesas ampliada', alvo: 6 }, metas[5].id);
+
+// Reunião de análise crítica e comentário
+const gov = modulos.governanca.service;
+const reuniao = gov.salvarReuniao({ titulo: 'Análise crítica mensal — Operações', data: `${ano}-${String(mesAtual).padStart(2, '0')}-05`, departamento_id: deptos.OPS, participantes: 'Bruno Lima, Gustavo Alves, Diego Rocha' });
+gov.salvarDecisao(reuniao.id, { descricao: 'Avaliar a compra de um segundo compressor para a câmara fria', responsavel: 'Bruno Lima', prazo: `${ano}-12-15` });
+colaboracao.comentar('indicadores', 'indicador', criados['OPS-03'].id, 'Precisamos de redundância no compressor. @bruno vamos levar para a reunião de análise crítica?');
+encerrar();
+
 console.log(`Banco de demonstração criado em ${arquivo}`);
-console.log(`${defs.length} indicadores, ${meses.length} meses de medições, ciclo "${ciclo.nome}" com ${metas.length} metas.`);
+console.log(`${defs.length + 1} indicadores, ${meses.length} meses de medições, ciclo "${ciclo.nome}" com ${metas.length + 2} metas e ${colabs.length} colaboradores.`);
+console.log(`Usuários (senha ${SENHA}): admin@demo.com, diretoria@demo.com, ana@demo.com (gestora Comercial), bruno@demo.com, carla@demo.com, diego@demo.com, eduardo@demo.com (colaborador).`);

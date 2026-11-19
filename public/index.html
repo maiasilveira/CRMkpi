@@ -2,25 +2,44 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>KPI & Metas</title>
+  <meta name="description" content="Gestão de indicadores de desempenho e metas bonificáveis">
+  <meta name="theme-color" content="#2f5bd3">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="sem-sessao">
+  <a class="pular" href="#app">Pular para o conteúdo</a>
   <header class="topo">
     <button class="menu-btn" id="menuBtn" aria-label="Abrir menu">☰</button>
     <a href="#/" class="marca"><span class="logo">◆</span> KPI &amp; Metas</a>
-    <nav id="nav" class="nav"></nav>
-    <button class="tema-btn" id="temaBtn" title="Alternar tema" aria-label="Alternar tema">🌓</button>
+    <nav id="nav" class="nav" aria-label="Principal"></nav>
+    <div class="topo-acoes">
+      <button class="btn-icone" id="sinoBtn" aria-label="Notificações">🔔<span id="sinoQtd" class="qtd" hidden></span></button>
+      <button class="btn-icone" id="temaBtn" title="Alternar tema" aria-label="Alternar tema">🌓</button>
+      <details class="menu menu-usuario" id="menuUsuario"></details>
+    </div>
   </header>
   <main id="app" class="conteudo" aria-live="polite"></main>
+  <datalist id="dlPessoas"></datalist>
   <div id="modal" class="modal" hidden>
-    <div class="modal-caixa" role="dialog" aria-modal="true">
+    <div class="modal-caixa" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
       <div class="modal-topo"><h2 id="modalTitulo"></h2><button class="fechar" data-fechar aria-label="Fechar">✕</button></div>
       <div id="modalCorpo"></div>
     </div>
   </div>
-  <div id="toast" class="toast" hidden></div>
-  <script src="app.js"></script>
+  <div id="toast" class="toast" hidden role="status"></div>
+  <script src="js/base.js"></script>
+  <script src="js/componentes.js"></script>
+  <script src="js/v-inicio.js"></script>
+  <script src="js/v-indicadores.js"></script>
+  <script src="js/v-planos.js"></script>
+  <script src="js/v-metas.js"></script>
+  <script src="js/v-governanca.js"></script>
+  <script src="js/v-admin.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>
