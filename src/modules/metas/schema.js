@@ -57,6 +57,8 @@ const V1 = `
 
 const PASSOS = [
   V1,
+  // v2 — data de submissão para lembretes de aprovação
+  (db) => addColuna(db, 'met_bonus', 'submetido_em', 'TEXT'),
 ];
 
 module.exports = function migrarMetas(db) {

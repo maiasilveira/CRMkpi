@@ -2,6 +2,7 @@
 const { transacao } = require('../../db');
 const E = require('../../core/erros');
 const calc = require('./calculo');
+const { usuarioAtual } = require('../../core/contexto');
 
 const STATUS_CICLO = ['planejamento', 'ativo', 'encerrado'];
 const AGREGACOES = ['soma', 'media', 'ultimo'];
@@ -272,9 +273,12 @@ function criarMetasService(db, core, fonteIndicadores = null) {
       const pesos = db.prepare('SELECT COALESCE(SUM(peso),0) s FROM met_metas WHERE ciclo_id=? AND departamento_id=?').get(cicloId, deptoId).s;
       E.exigir(Math.abs(pesos - 100) < 0.001, `A soma dos pesos das metas deve ser 100% (atual: ${pesos}%)`);
     }
-    db.prepare('UPDATE met_bonus SET status=?, aprovado_por=?, aprovado_em=? WHERE id=?')
-      .run(para, acao === 'aprovar' ? (usuario || 'aprovador') : null, acao === 'aprovar' ? new Date().toISOString() : null, b.id);
-    audit('apuracao', deptoId, acao, { cicloId, usuario });
+    const quem = usuario || usuarioAtual()?.nome || 'aprovador';
+    db.prepare('UPDATE met_bonus SET status=?, aprovado_por=?, aprovado_em=?, submetido_em=? WHERE id=?')
+      .run(para, acao === 'aprovar' ? quem : null, acao === 'aprovar' ? new Date().toISOString() : null,
+        acao === 'submeter' ? new Date().toISOString() : (acao === 'aprovar' ? b.submetido_em : null), b.id);
+    audit('apuracao', deptoId, acao, { cicloId, usuario: quem });
+    core.eventos.emit('metas.apuracao', { acao, ciclo, departamento: core.obterDepartamento(deptoId) });
     return apurarCiclo(cicloId);
   }
 

@@ -137,6 +137,7 @@ function criarIndicadoresService(db, core) {
     }
     audit('medicao', medId, existente ? 'atualizar' : 'criar', { indicadorId, periodo, valor, status });
     const med = db.prepare('SELECT * FROM ind_medicoes WHERE id=?').get(medId);
+    if (status === 'desvio') core.eventos.emit('indicadores.desvio', { indicador: ind, medicao: med });
     return { ...med, exige_analise: status === 'desvio' };
   }
 

@@ -70,3 +70,37 @@ function rotasCore(core, modulosAtivos) {
 }
 
 module.exports = { rotasAuth, rotasCore };
+
+/** Rotas de notificações, comentários e anexos. */
+function rotasColaboracao(core, notif, colab, agendador) {
+  const r = express.Router();
+  const n = (v) => Number(v);
+  r.get('/notificacoes', (req, res) => res.json(notif.listar({ apenasNaoLidas: req.query.nao_lidas === '1' })));
+  r.put('/notificacoes/lidas', (req, res) => { notif.marcarTodas(); res.status(204).end(); });
+  r.put('/notificacoes/:id/lida', (req, res) => { notif.marcarLida(n(req.params.id)); res.status(204).end(); });
+  r.post('/notificacoes/verificar', async (req, res, next) => {
+    try { core.exigirPerfil(); res.json(await notif.executarVerificacoes()); } catch (e) { next(e); }
+  });
+  r.post('/notificacoes/teste', async (req, res, next) => { try { res.json(await notif.testarCanais()); } catch (e) { next(e); } });
+  r.get('/notificacoes/envios', (req, res) => res.json(notif.enviados()));
+  r.get('/agendador', (req, res) => { core.exigirPerfil(); res.json(agendador.status()); });
+
+  const ent = '/:modulo(\\w+)/:entidade(\\w+)/:id(\\d+)';
+  r.get('/comentarios' + ent, (req, res) => res.json(colab.listarComentarios(req.params.modulo, req.params.entidade, n(req.params.id))));
+  r.post('/comentarios' + ent, (req, res) => res.status(201).json(colab.comentar(req.params.modulo, req.params.entidade, n(req.params.id), req.body?.texto)));
+  r.delete('/comentarios/:id', (req, res) => { colab.excluirComentario(n(req.params.id)); res.status(204).end(); });
+
+  r.get('/anexos' + ent, (req, res) => res.json(colab.listarAnexos(req.params.modulo, req.params.entidade, n(req.params.id))));
+  r.post('/anexos' + ent, express.raw({ type: () => true, limit: '25mb' }), (req, res) =>
+    res.status(201).json(colab.anexar(req.params.modulo, req.params.entidade, n(req.params.id), req.query.nome, req.body)));
+  r.get('/anexos/:id', (req, res) => {
+    const a = colab.obterAnexo(n(req.params.id));
+    res.setHeader('Content-Type', a.mime);
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Content-Disposition', `${a.inline && req.query.baixar !== '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.nome)}`);
+    res.sendFile(a.caminho);
+  });
+  r.delete('/anexos/:id', (req, res) => { colab.excluirAnexo(n(req.params.id)); res.status(204).end(); });
+  return r;
+}
+module.exports.rotasColaboracao = rotasColaboracao;

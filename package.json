@@ -20,7 +20,8 @@
   },
   "homepage": "https://github.com/maiasilveira/CRMkpi#readme",
   "dependencies": {
-    "express": "^4.22.3"
+    "express": "^4.22.3",
+    "nodemailer": "^10.3.1"
   },
   "engines": {
     "node": ">=22.13"

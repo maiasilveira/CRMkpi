@@ -22,8 +22,8 @@ function cliente(base) {
 }
 
 /** Sobe a aplicação em memória com um admin logado. */
-async function servidor(modulos, { semAdmin = false } = {}) {
-  const ctx = criarApp({ dbFile: ':memory:', modulos, semAgendador: true });
+async function servidor(modulos, { semAdmin = false, transporteEmail } = {}) {
+  const ctx = criarApp({ dbFile: ':memory:', modulos, semAgendador: true, transporteEmail });
   const srv = await new Promise((ok) => { const s = ctx.app.listen(0, '127.0.0.1', () => ok(s)); });
   const base = `http://127.0.0.1:${srv.address().port}/api`;
   const req = cliente(base);
@@ -40,4 +40,5 @@ async function servidor(modulos, { semAdmin = false } = {}) {
   return { srv, req, base, ctx, entrarComo, fechar: () => { srv.close(); ctx.encerrar?.(); } };
 }
 
-module.exports = { servidor, cliente };
+const esperar = (ms = 30) => new Promise((ok) => setTimeout(ok, ms));
+module.exports = { servidor, cliente, esperar };
