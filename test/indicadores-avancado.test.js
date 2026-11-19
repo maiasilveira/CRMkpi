@@ -110,6 +110,45 @@ test('mapa estratégico BSC', async (t) => {
   assert.equal(m.perspectivas[1].objetivos[0].indicadores[0].codigo, 'NPS');
 });
 
+test('perspectivas do BSC configuráveis', async (t) => {
+  const { req, novo, entrarComo, dep } = await base(t);
+  // Padrão: as quatro perspectivas clássicas
+  assert.deepEqual((await req('GET', '/indicadores/perspectivas')).body.map((p) => p.chave), ['financeira', 'clientes', 'processos', 'aprendizado']);
+  const obj = (await req('POST', '/indicadores/objetivos', { perspectiva: 'clientes', nome: 'Encantar usuários' })).body.perspectivas[1].objetivos[0];
+  await novo({ codigo: 'FIN', nome: 'Receita', meta: 1, perspectiva: 'financeira' });
+
+  // Renomear, reordenar, incluir (com acento) e excluir uma sem vínculos
+  let r = await req('PUT', '/indicadores/perspectivas', { perspectivas: [
+    { chave: 'clientes', nome: 'Usuários da rodovia' }, { chave: 'financeira', nome: 'Econômico-financeira' },
+    { nome: 'Sustentabilidade & ESG' }, { chave: 'processos', nome: 'Processos internos' }] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.map((p) => p.chave), ['clientes', 'financeira', 'sustentabilidade_esg', 'processos']);
+  const mapa = (await req('GET', '/indicadores/mapa')).body;
+  assert.deepEqual(mapa.perspectivas.map((p) => p.nome), ['Usuários da rodovia', 'Econômico-financeira', 'Sustentabilidade & ESG', 'Processos internos']);
+  assert.equal(mapa.perspectivas[0].objetivos[0].id, obj.id); // renomear mantém o vínculo
+
+  // A nova perspectiva vale para objetivos e indicadores; a excluída deixa de valer
+  assert.equal((await req('POST', '/indicadores/objetivos', { perspectiva: 'sustentabilidade_esg', nome: 'Reduzir emissões' })).status, 201);
+  assert.equal((await req('POST', '/indicadores/objetivos', { perspectiva: 'aprendizado', nome: 'X' })).status, 400);
+  assert.equal((await req('POST', '/indicadores', { departamento_id: dep.id, polaridade: 'maior_melhor', nome: 'Y', meta: 1, perspectiva: 'aprendizado' })).status, 400);
+
+  // Não exclui perspectiva com objetivos ou indicadores vinculados
+  r = await req('PUT', '/indicadores/perspectivas', { perspectivas: [{ chave: 'clientes', nome: 'Usuários' }, { chave: 'sustentabilidade_esg', nome: 'ESG' }] });
+  assert.equal(r.status, 409);
+  assert.match(r.body.erro || JSON.stringify(r.body), /Econômico-financeira/);
+
+  // Validações: vazia, nome repetido, chave inventada
+  assert.equal((await req('PUT', '/indicadores/perspectivas', { perspectivas: [] })).status, 400);
+  assert.equal((await req('PUT', '/indicadores/perspectivas', { perspectivas: [{ nome: 'A' }, { nome: 'a' }] })).status, 400);
+  assert.equal((await req('PUT', '/indicadores/perspectivas', { perspectivas: [{ chave: 'inventada', nome: 'A' }] })).status, 400);
+
+  // Só o administrador altera; qualquer usuário consulta
+  await req('POST', '/usuarios', { nome: 'Dir', email: 'dir@empresa.com', senha: 'senha-forte-2', perfil: 'diretoria', departamento_id: dep.id });
+  const dir = await entrarComo('dir@empresa.com', 'senha-forte-2');
+  assert.equal((await dir('GET', '/indicadores/perspectivas')).body.length, 4);
+  assert.equal((await dir('PUT', '/indicadores/perspectivas', { perspectivas: [{ nome: 'Z' }] })).status, 403);
+});
+
 test('importação de medições por CSV e XLSX (com simulação)', async (t) => {
   const { req, novo } = await base(t);
   await novo({ codigo: 'A1', nome: 'A', meta: 10 });

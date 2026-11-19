@@ -7,7 +7,18 @@ const { usuarioAtual } = require('../../core/contexto');
 const POLARIDADES = ['maior_melhor', 'menor_melhor', 'faixa'];
 const FREQUENCIAS = ['mensal', 'bimestral', 'trimestral', 'semestral', 'anual'];
 const TECNICAS = ['5w2h', '5porques', 'ishikawa', 'pareto', 'a3', 'arvore'];
-const PERSPECTIVAS = ['financeira', 'clientes', 'processos', 'aprendizado'];
+// Perspectivas do BSC: configuráveis pelo administrador (configuração "bsc_perspectivas", JSON [{chave, nome}]).
+// Estas são o padrão quando nada foi configurado.
+const PERSPECTIVAS_PADRAO = [
+  { chave: 'financeira', nome: 'Financeira' },
+  { chave: 'clientes', nome: 'Clientes' },
+  { chave: 'processos', nome: 'Processos internos' },
+  { chave: 'aprendizado', nome: 'Aprendizado e crescimento' },
+];
+const PERSPECTIVAS = PERSPECTIVAS_PADRAO.map((p) => p.chave);
+const MAX_PERSPECTIVAS = 10;
+const slug = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'perspectiva';
 const CAMPOS_A3 = ['contexto', 'situacao_atual', 'objetivo', 'analise_causa', 'contramedidas', 'plano_implementacao', 'acompanhamento'];
 const STATUS_PLANO = ['aberto', 'em_andamento', 'concluido', 'cancelado'];
 const STATUS_ACAO = ['pendente', 'em_andamento', 'concluida', 'cancelada'];
@@ -41,7 +52,7 @@ function criarIndicadoresService(db, core) {
       formula_calculo: E.texto(d.formula_calculo, 'formula_calculo'),
       objetivo_id: E.numero(d.objetivo_id, 'objetivo_id'),
     };
-    if (ind.perspectiva) E.umDe(ind.perspectiva, 'perspectiva', PERSPECTIVAS);
+    if (ind.perspectiva) E.umDe(ind.perspectiva, 'perspectiva', chavesPerspectivas());
     if (ind.objetivo_id) E.exigir(db.prepare('SELECT 1 FROM ind_objetivos WHERE id=?').get(ind.objetivo_id), 'Objetivo estratégico não encontrado');
     if (ind.tipo === 'calculado') validarFormula(ind);
     else ind.formula_calculo = null;
@@ -510,10 +521,67 @@ function criarIndicadoresService(db, core) {
     return { ...c, pontos: c.pontos.map((p, i) => ({ ...p, periodo: meds[i].periodo })) };
   }
 
+  // ---------------- Perspectivas do BSC ----------------
+  function listarPerspectivas() {
+    let lista = null;
+    try { lista = JSON.parse(core.obterConfig('bsc_perspectivas') || 'null'); } catch { lista = null; }
+    const valida = Array.isArray(lista) && lista.length
+      && lista.every((p) => p && typeof p.chave === 'string' && p.chave && typeof p.nome === 'string' && p.nome);
+    return (valida ? lista : PERSPECTIVAS_PADRAO).map((p) => ({ chave: p.chave, nome: p.nome }));
+  }
+  const chavesPerspectivas = () => listarPerspectivas().map((p) => p.chave);
+  const usoPerspectiva = (chave) => ({
+    objetivos: db.prepare('SELECT COUNT(*) n FROM ind_objetivos WHERE perspectiva=?').get(chave).n,
+    indicadores: db.prepare('SELECT COUNT(*) n FROM ind_indicadores WHERE perspectiva=?').get(chave).n,
+  });
+  const chavesEmUso = () => new Set(db.prepare(`SELECT perspectiva p FROM ind_objetivos
+      UNION SELECT perspectiva FROM ind_indicadores WHERE perspectiva IS NOT NULL`).all().map((r) => r.p));
+
+  /** Substitui a lista de perspectivas. Itens com "chave" mantêm a chave (renomear/reordenar); sem chave, são novos. */
+  function salvarPerspectivas(d) {
+    core.exigirPerfil();
+    const entrada = Array.isArray(d) ? d : d?.perspectivas;
+    E.exigir(Array.isArray(entrada) && entrada.length, 'Informe ao menos uma perspectiva');
+    E.exigir(entrada.length <= MAX_PERSPECTIVAS, `Máximo de ${MAX_PERSPECTIVAS} perspectivas`);
+    const atuais = listarPerspectivas();
+    const emUso = chavesEmUso();
+    const conhecidas = new Set([...atuais.map((p) => p.chave), ...emUso]);
+    const nomes = new Set();
+    const usadas = new Set();
+    const nova = [];
+    for (const p of entrada) {
+      const nome = E.texto(p?.nome, 'nome', { obrigatorio: true });
+      E.exigir(nome.length <= 60, `Nome muito longo (máx. 60 caracteres): ${nome}`);
+      const k = nome.toLocaleLowerCase('pt-BR');
+      E.exigir(!nomes.has(k), `Perspectiva repetida: ${nome}`);
+      nomes.add(k);
+      let chave = E.texto(p?.chave, 'chave');
+      if (chave) {
+        E.exigir(conhecidas.has(chave), `Perspectiva desconhecida: ${chave}`);
+      } else {
+        const baseChave = slug(nome);
+        chave = baseChave;
+        for (let n = 2; conhecidas.has(chave) || usadas.has(chave); n++) chave = `${baseChave}_${n}`;
+      }
+      E.exigir(!usadas.has(chave), `Perspectiva repetida: ${nome}`);
+      usadas.add(chave);
+      nova.push({ chave, nome });
+    }
+    for (const p of atuais) {
+      if (usadas.has(p.chave)) continue;
+      const u = usoPerspectiva(p.chave);
+      E.exigir(!u.objetivos && !u.indicadores, `A perspectiva "${p.nome}" tem ${u.objetivos} objetivo(s) e `
+        + `${u.indicadores} indicador(es) vinculados. Mova-os para outra perspectiva antes de excluí-la.`, 409);
+    }
+    core.salvarConfig({ bsc_perspectivas: JSON.stringify(nova) });
+    audit('perspectivas', null, 'atualizar', nova);
+    return nova;
+  }
+
   // ---------------- Mapa estratégico (BSC) ----------------
   function salvarObjetivo(d, id) {
     core.exigirPerfil('diretoria');
-    const o = { perspectiva: E.umDe(d.perspectiva, 'perspectiva', PERSPECTIVAS), nome: E.texto(d.nome, 'nome', { obrigatorio: true }),
+    const o = { perspectiva: E.umDe(d.perspectiva, 'perspectiva', chavesPerspectivas()), nome: E.texto(d.nome, 'nome', { obrigatorio: true }),
       descricao: E.texto(d.descricao, 'descricao'), ordem: E.numero(d.ordem, 'ordem') ?? 0 };
     let oid = id;
     if (id) db.prepare('UPDATE ind_objetivos SET perspectiva=?, nome=?, descricao=?, ordem=? WHERE id=?').run(o.perspectiva, o.nome, o.descricao, o.ordem, id);
@@ -535,7 +603,10 @@ function criarIndicadoresService(db, core) {
       return { ...o, situacao, contribui_para: db.prepare('SELECT destino_id FROM ind_objetivos_relacoes WHERE origem_id=?').all(o.id).map((r) => r.destino_id),
         indicadores: meus.map((i) => ({ id: i.id, codigo: i.codigo, nome: i.nome, status: i.ultima_medicao?.status || 'sem_medicao', departamento: i.departamento })) };
     });
-    return { perspectivas: PERSPECTIVAS.map((p) => ({ perspectiva: p, objetivos: objetivos.filter((o) => o.perspectiva === p) })),
+    const lista = listarPerspectivas();
+    // Objetivos com perspectiva fora da lista (ex.: configuração editada à mão) continuam visíveis.
+    for (const o of objetivos) if (!lista.some((p) => p.chave === o.perspectiva)) lista.push({ chave: o.perspectiva, nome: o.perspectiva });
+    return { perspectivas: lista.map((p) => ({ perspectiva: p.chave, nome: p.nome, objetivos: objetivos.filter((o) => o.perspectiva === p.chave) })),
       sem_objetivo: inds.filter((i) => !i.objetivo_id).length };
   }
 
@@ -606,7 +677,7 @@ function criarIndicadoresService(db, core) {
   return {
     db, metaVigente, recalcularIndicador, porCodigo,
     listarMetasPeriodo, salvarMetaPeriodo, excluirMetaPeriodo, listarVersoes, cartaControle,
-    salvarObjetivo, excluirObjetivo, mapaEstrategico,
+    salvarObjetivo, excluirObjetivo, mapaEstrategico, listarPerspectivas, salvarPerspectivas,
     listar, obter, salvar, excluir,
     listarMedicoes, registrarMedicao, excluirMedicao,
     listarAnalises, obterAnalise, registrarAnalise, excluirAnalise,

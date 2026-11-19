@@ -72,6 +72,11 @@ rota('/admin/config', async (el) => {
       <label class="largo">Webhook do Slack<input name="slack_webhook" value="${esc(c.slack_webhook)}" placeholder="https://hooks.slack.com/services/…"></label></div>
       <p class="dica">Desvios, apurações e alertas de prazo são publicados no canal configurado.</p></div>
   </div><div class="rodape-form"><button type="button" class="btn" id="testar">Enviar teste</button><button type="button" class="btn" id="verificar">Executar verificações agora</button><button class="btn pri">Salvar</button></div></form>
+  ${temModulo('indicadores') ? `<div class="card" id="cardPerspectivas" style="margin-top:16px"><h2>Perspectivas do mapa estratégico (BSC)</h2>
+    <p class="dica">Renomeie, reordene, inclua ou exclua perspectivas (até 10). Renomear mantém os objetivos e indicadores vinculados.
+      Uma perspectiva só pode ser excluída quando não tiver objetivos nem indicadores vinculados.</p>
+    <div id="listaPersp"></div>
+    <div class="rodape-form"><button type="button" class="btn" id="addPersp">+ Perspectiva</button><button type="button" class="btn pri" id="salvarPersp">Salvar perspectivas</button></div></div>` : ''}
   <div class="grid g2" style="margin-top:16px"><div class="card"><h2>Tarefas agendadas</h2><table><tbody>${tarefas.map((t) => `<tr><td>${esc(t.nome)}</td><td>a cada ${t.intervalo_min} min</td><td class="muted">${t.ultimo ? dataHoraBR(t.ultimo.em) + (t.ultimo.erro ? ' — erro: ' + esc(t.ultimo.erro) : '') : 'ainda não executada'}</td></tr>`).join('')}</tbody></table></div>
     <div class="card"><h2>Últimos envios</h2>${envios.length ? `<table><tbody>${envios.slice(0, 15).map((e) => `<tr><td>${esc(e.canal)}</td><td>${esc(e.destino)}</td><td class="muted">${esc(e.status)}</td><td class="muted">${dataHoraBR(e.em)}</td></tr>`).join('')}</tbody></table>` : vazio('Nenhum envio desde que o servidor iniciou')}</div></div>`;
   $('#fCfg', el).addEventListener('submit', tentar(async (e) => {
@@ -82,7 +87,38 @@ rota('/admin/config', async (el) => {
   }));
   $('#testar', el).onclick = tentar(async () => { const r = await api('/notificacoes/teste', { metodo: 'POST' }); toast(Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(' · ')); });
   $('#verificar', el).onclick = tentar(async () => { const r = await api('/notificacoes/verificar', { metodo: 'POST' }); toast(`${r.notificacoes_criadas} notificação(ões) criada(s)`); atualizarSino(); });
+  if (temModulo('indicadores')) await editorPerspectivas(el);
 });
+
+async function editorPerspectivas(el) {
+  let persp = await api('/indicadores/perspectivas');
+  const lista = $('#listaPersp', el);
+  const desenhar = () => {
+    lista.innerHTML = persp.map((p, i) => `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input data-i="${i}" value="${esc(p.nome)}" maxlength="60" required placeholder="Nome da perspectiva" aria-label="Perspectiva ${i + 1}" style="flex:1">
+      <button type="button" class="btn peq" data-sobe="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Mover para cima" title="Mover para cima">↑</button>
+      <button type="button" class="btn peq" data-desce="${i}" ${i === persp.length - 1 ? 'disabled' : ''} aria-label="Mover para baixo" title="Mover para baixo">↓</button>
+      <button type="button" class="btn perigo peq" data-remove="${i}" ${persp.length === 1 ? 'disabled' : ''}>Excluir</button></div>`).join('');
+  };
+  desenhar();
+  lista.addEventListener('input', (e) => { const i = e.target.dataset?.i; if (i !== undefined) persp[+i].nome = e.target.value; });
+  lista.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const troca = (a, c) => { [persp[a], persp[c]] = [persp[c], persp[a]]; };
+    if (b.dataset.sobe !== undefined) troca(+b.dataset.sobe, +b.dataset.sobe - 1);
+    else if (b.dataset.desce !== undefined) troca(+b.dataset.desce, +b.dataset.desce + 1);
+    else if (b.dataset.remove !== undefined) persp.splice(+b.dataset.remove, 1);
+    desenhar();
+  });
+  $('#addPersp', el).onclick = () => {
+    if (persp.length >= 10) { toast('Máximo de 10 perspectivas', true); return; }
+    persp.push({ nome: '' }); desenhar(); $(`[data-i="${persp.length - 1}"]`, lista).focus();
+  };
+  $('#salvarPersp', el).onclick = tentar(async () => {
+    persp = await api('/indicadores/perspectivas', { metodo: 'PUT', corpo: { perspectivas: persp } });
+    limparCachePerspectivas(); desenhar(); toast('Perspectivas salvas');
+  });
+}
 
 rota('/auditoria', async (el, _, q) => {
   const lista = await api('/auditoria?' + qs({ limite: 300, ...q }));

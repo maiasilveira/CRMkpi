@@ -3,9 +3,21 @@
 
 let cacheObjetivos = null;
 async function objetivosOpcoes(sel) {
-  if (!cacheObjetivos) cacheObjetivos = (await api('/indicadores/mapa')).perspectivas.flatMap((p) => p.objetivos.map((o) => [o.id, `${rot(p.perspectiva)} · ${o.nome}`]));
+  if (!cacheObjetivos) cacheObjetivos = (await api('/indicadores/mapa')).perspectivas.flatMap((p) => p.objetivos.map((o) => [o.id, `${p.nome} · ${o.nome}`]));
   return opcoes(cacheObjetivos, sel, '—');
 }
+
+// Perspectivas do BSC (configuráveis pelo administrador em Configurações).
+let cachePerspectivas = null;
+async function perspectivasBsc() {
+  if (!cachePerspectivas) cachePerspectivas = await api('/indicadores/perspectivas');
+  return cachePerspectivas;
+}
+const nomePerspectiva = (k) => cachePerspectivas?.find((p) => p.chave === k)?.nome || rot(k);
+async function perspectivaOpcoes(sel, vazio) {
+  return opcoes((await perspectivasBsc()).map((p) => [p.chave, p.nome]), sel, vazio);
+}
+const limparCachePerspectivas = () => { cachePerspectivas = null; cacheObjetivos = null; };
 
 async function formIndicador(i = {}) {
   const editando = !!i.id;
@@ -16,7 +28,7 @@ async function formIndicador(i = {}) {
     <label>Responsável<input name="responsavel" value="${esc(i.responsavel)}" list="dlPessoas"></label>
     <label>Unidade<input name="unidade" value="${esc(i.unidade)}" placeholder="%, R$, dias…"></label>
     <label>Frequência<select name="frequencia">${opcoes([['mensal', 'Mensal'], ['bimestral', 'Bimestral'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual']], i.frequencia || 'mensal')}</select></label>
-    <label>Perspectiva (BSC)<select name="perspectiva">${opcoes(['financeira', 'clientes', 'processos', 'aprendizado'].map((p) => [p, rot(p)]), i.perspectiva, '—')}</select></label>
+    <label>Perspectiva (BSC)<select name="perspectiva">${await perspectivaOpcoes(i.perspectiva, '—')}</select></label>
     <label>Objetivo estratégico<select name="objetivo_id">${await objetivosOpcoes(i.objetivo_id)}</select></label>
     <label>Polaridade *<select name="polaridade" required>${opcoes(['maior_melhor', 'menor_melhor', 'faixa'].map((p) => [p, rot(p)]), i.polaridade || 'maior_melhor')}</select></label>
     <label>Meta *<input name="meta" type="number" step="any" required value="${esc(i.meta)}"></label>
@@ -204,7 +216,7 @@ function abrirNovoPlano(indicadorId, analises, analiseId) {
 rota('/indicadores/:id', async (el, { id }, q) => {
   const aba = q.aba || 'geral';
   const [ind, meds, analises, planos, cep] = await Promise.all([api('/indicadores/' + id), api(`/indicadores/${id}/medicoes`), api(`/indicadores/${id}/analises`),
-    api('/planos?indicador_id=' + id), api(`/indicadores/${id}/cep`)]);
+    api('/planos?indicador_id=' + id), api(`/indicadores/${id}/cep`), perspectivasBsc()]);
   const editavel = podeEditarDepto(ind.departamento_id);
   const proximo = (() => { const u = meds[meds.length - 1]?.periodo; if (!u) return new Date().toISOString().slice(0, 7); const [a, m] = u.split('-').map(Number); return m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, '0')}`; })();
   const ult = ind.ultima_medicao;
@@ -215,7 +227,7 @@ rota('/indicadores/:id', async (el, { id }, q) => {
     <div class="stat"><div class="rot">Meta / range</div><div style="font-weight:600;margin-top:4px">${esc(faixaTexto(ind))}</div></div>
     ${stat(`Último valor ${ult ? '(' + mesBR(ult.periodo) + ')' : ''}`, ult ? fmt(ult.valor) : '—', ult?.status === 'atingido' ? 'ok' : ult?.status === 'atencao' ? 'at' : ult ? 'er' : '')}
     <div class="stat"><div class="rot">Tendência / estabilidade</div><div style="margin-top:6px">${selo(ind.tendencia)} ${cep.suficiente ? selo(cep.ultimo_instavel ? 'desvio' : cep.estavel ? 'atingido' : 'atencao', cep.ultimo_instavel ? 'Fora de controle' : cep.estavel ? 'Processo estável' : 'Sinais de instabilidade') : ''}</div></div>
-    <div class="stat"><div class="rot">Ficha</div><div class="muted" style="font-size:13px">${rot(ind.tipo)} · ${rot(ind.polaridade)} · ${esc(ind.frequencia)}<br>${esc(ind.responsavel || 'sem responsável')}${ind.perspectiva ? ' · ' + rot(ind.perspectiva) : ''}
+    <div class="stat"><div class="rot">Ficha</div><div class="muted" style="font-size:13px">${rot(ind.tipo)} · ${rot(ind.polaridade)} · ${esc(ind.frequencia)}<br>${esc(ind.responsavel || 'sem responsável')}${ind.perspectiva ? ' · ' + esc(nomePerspectiva(ind.perspectiva)) : ''}
       ${ind.tipo === 'calculado' ? `<br><code>${esc(ind.formula_calculo)}</code>` : ''}</div></div>
   </div>
   ${abas([['geral', 'Evolução e medições'], ['analises', `Análises e planos (${analises.length}/${planos.length})`], ['sazonal', 'Metas por período'], ['historico', 'Histórico da ficha'], ['colab', 'Comentários e anexos']], aba)}
@@ -305,15 +317,15 @@ rota('/mapa', async (el) => {
   const todos = m.perspectivas.flatMap((p) => p.objetivos);
   const nome = (id) => todos.find((o) => o.id === id)?.nome || '';
   el.innerHTML = `<div class="cabecalho"><div><h1>Mapa estratégico</h1><div class="muted">Balanced Scorecard — objetivos por perspectiva e situação dos indicadores vinculados</div></div>
-    ${ehDiretoria() ? '<button class="btn pri" id="novoObj">+ Objetivo</button>' : ''}</div>
-    <div class="mapa">${m.perspectivas.map((p) => `<section class="perspectiva"><h2>${rot(p.perspectiva)}</h2><div class="objetivos">
+    <div class="acoes">${ehAdmin() ? '<a class="btn" href="#/admin/config">Editar perspectivas</a>' : ''}${ehDiretoria() ? '<button class="btn pri" id="novoObj">+ Objetivo</button>' : ''}</div></div>
+    <div class="mapa">${m.perspectivas.map((p) => `<section class="perspectiva"><h2>${esc(p.nome)}</h2><div class="objetivos">
       ${p.objetivos.map((o) => `<article class="objetivo ${o.situacao}"><div class="depto-topo" style="margin:0"><b>${esc(o.nome)}</b>${ehDiretoria() ? `<button class="link-btn" data-edit-obj="${o.id}">editar</button>` : ''}</div>
         ${o.descricao ? `<div class="muted" style="font-size:12px">${esc(o.descricao)}</div>` : ''}
         <div class="obj-inds">${o.indicadores.map((i) => `<a href="#/indicadores/${i.id}" class="selo ${i.status}" title="${esc(i.departamento)}">${esc(i.codigo || i.nome)}</a>`).join('') || '<span class="muted" style="font-size:12px">sem indicadores</span>'}</div>
         ${o.contribui_para.length ? `<div class="muted" style="font-size:12px">→ contribui para: ${o.contribui_para.map((x) => esc(nome(x))).join(', ')}</div>` : ''}</article>`).join('') || '<p class="muted">Nenhum objetivo</p>'}</div></section>`).join('')}</div>
     ${m.sem_objetivo ? `<p class="dica">${m.sem_objetivo} indicador(es) visível(is) sem objetivo estratégico vinculado.</p>` : ''}`;
   const form = (o = {}) => abrirModal(o.id ? 'Editar objetivo' : 'Novo objetivo estratégico', `<form><div class="campos">
-    <label>Perspectiva *<select name="perspectiva" required>${opcoes(['financeira', 'clientes', 'processos', 'aprendizado'].map((p) => [p, rot(p)]), o.perspectiva)}</select></label>
+    <label>Perspectiva *<select name="perspectiva" required>${opcoes(m.perspectivas.map((p) => [p.perspectiva, p.nome]), o.perspectiva)}</select></label>
     <label class="largo">Nome *<input name="nome" required value="${esc(o.nome)}"></label><label class="largo">Descrição<textarea name="descricao">${esc(o.descricao)}</textarea></label>
     <label>Ordem<input type="number" name="ordem" value="${esc(o.ordem ?? 0)}"></label>
     <label class="largo">Contribui para (causa e efeito)<select name="contribui_para" multiple size="5">${todos.filter((x) => x.id !== o.id).map((x) => `<option value="${x.id}" ${o.contribui_para?.includes(x.id) ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></label></div>

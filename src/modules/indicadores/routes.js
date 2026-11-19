@@ -9,6 +9,8 @@ function rotasIndicadores(s, { entrada, ia }) {
 
   r.get('/painel', (req, res) => res.json(s.painel()));
   r.get('/mapa', (req, res) => res.json(s.mapaEstrategico()));
+  r.get('/perspectivas', (req, res) => res.json(s.listarPerspectivas()));
+  r.put('/perspectivas', (req, res) => res.json(s.salvarPerspectivas(req.body)));
   r.post('/objetivos', (req, res) => res.status(201).json(s.salvarObjetivo(req.body)));
   r.put('/objetivos/:oid', (req, res) => res.json(s.salvarObjetivo(req.body, id(req, 'oid'))));
   r.delete('/objetivos/:oid', (req, res) => { s.excluirObjetivo(id(req, 'oid')); res.status(204).end(); });
