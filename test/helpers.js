@@ -22,8 +22,8 @@ function cliente(base) {
 }
 
 /** Sobe a aplicação em memória com um admin logado. */
-async function servidor(modulos, { semAdmin = false, transporteEmail } = {}) {
-  const ctx = criarApp({ dbFile: ':memory:', modulos, semAgendador: true, transporteEmail });
+async function servidor(modulos, { semAdmin = false, transporteEmail, clienteIa } = {}) {
+  const ctx = criarApp({ dbFile: ':memory:', modulos, semAgendador: true, transporteEmail, clienteIa });
   const srv = await new Promise((ok) => { const s = ctx.app.listen(0, '127.0.0.1', () => ok(s)); });
   const base = `http://127.0.0.1:${srv.address().port}/api`;
   const req = cliente(base);

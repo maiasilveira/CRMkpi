@@ -26,7 +26,7 @@ const CATALOGO = {
  * @param {boolean}  [opts.semAgendador]  não inicia tarefas periódicas (testes/seed)
  * @param {object}   [opts.transporteEmail] transporte de e-mail alternativo (testes)
  */
-function criarApp({ dbFile, modulos, semAgendador = false, transporteEmail } = {}) {
+function criarApp({ dbFile, modulos, semAgendador = false, transporteEmail, clienteIa } = {}) {
   const ativos = modulos || (process.env.MODULOS ? process.env.MODULOS.split(',').map((s) => s.trim()) : Object.keys(CATALOGO));
   const arquivoDb = dbFile || process.env.DB_FILE || path.join(__dirname, '..', 'data', 'kpi.db');
   const db = abrirBanco(arquivoDb);
@@ -39,7 +39,7 @@ function criarApp({ dbFile, modulos, semAgendador = false, transporteEmail } = {
   const notificacoes = criarNotificacoesService(core, { transporteEmail });
   const colaboracao = criarColaboracaoService(core, { dirAnexos });
   const sso = criarSso(core);
-  const servicos = { core, notificacoes, colaboracao, agendador, dirDados };
+  const servicos = { core, notificacoes, colaboracao, agendador, dirDados, clienteIa };
 
   const app = express();
   app.disable('x-powered-by');
