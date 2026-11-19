@@ -16,6 +16,7 @@ const { criarColaboracaoService } = require('./core/colaboracao');
 const CATALOGO = {
   indicadores: require('./modules/indicadores'),
   metas: require('./modules/metas'),
+  governanca: require('./modules/governanca'),
 };
 
 /**
