@@ -100,7 +100,12 @@ function criarCoreService(db) {
 
   // ================= Usuários =================
   const publico = (u) => u && ({ id: u.id, nome: u.nome, email: u.email, login: u.login, perfil: u.perfil, departamento_id: u.departamento_id,
-    ativo: u.ativo, notificar_email: u.notificar_email, sso: !!u.sso_sub, ultimo_acesso: u.ultimo_acesso, criado_em: u.criado_em });
+    ativo: u.ativo, notificar_email: u.notificar_email, ver_remuneracao: !!u.ver_remuneracao, sso: !!u.sso_sub, ultimo_acesso: u.ultimo_acesso, criado_em: u.criado_em });
+  /** Salários e bônus individuais: administradores e usuários com a permissão "ver_remuneracao". Sem usuário = processo interno. */
+  function podeVerRemuneracao(u = usuarioAtual()) { return !u || u.perfil === 'admin' || !!u.ver_remuneracao; }
+  function exigirRemuneracao() {
+    E.exigir(podeVerRemuneracao(), 'Ação restrita a quem tem acesso à remuneração (salários e bônus individuais)', 403);
+  }
   const totalUsuarios = () => db.prepare('SELECT COUNT(*) n FROM usuarios').get().n;
   function obterUsuario(id) {
     const u = db.prepare('SELECT * FROM usuarios WHERE id=?').get(id);
@@ -133,6 +138,8 @@ function criarCoreService(db) {
       departamento_id: E.numero(d.departamento_id, 'departamento_id'),
       ativo: d.ativo === undefined ? 1 : (d.ativo ? 1 : 0),
       notificar_email: d.notificar_email === undefined ? 1 : (d.notificar_email ? 1 : 0),
+      // ausente = mantém o valor atual (ou 0 em usuário novo)
+      ver_remuneracao: d.ver_remuneracao === undefined ? (id ? obterUsuario(id).ver_remuneracao : 0) : (d.ver_remuneracao ? 1 : 0),
     };
     E.exigir(/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u.email), 'E-mail inválido');
     if (u.departamento_id) obterDepartamento(u.departamento_id);
@@ -146,8 +153,8 @@ function criarCoreService(db) {
         const admins = db.prepare(`SELECT COUNT(*) n FROM usuarios WHERE perfil='admin' AND ativo=1 AND id<>?`).get(id).n;
         E.exigir(admins > 0, 'É necessário manter pelo menos um administrador ativo');
       }
-      db.prepare('UPDATE usuarios SET nome=?, email=?, perfil=?, departamento_id=?, ativo=?, notificar_email=? WHERE id=?')
-        .run(u.nome, u.email, u.perfil, u.departamento_id, u.ativo, u.notificar_email, id);
+      db.prepare('UPDATE usuarios SET nome=?, email=?, perfil=?, departamento_id=?, ativo=?, notificar_email=?, ver_remuneracao=? WHERE id=?')
+        .run(u.nome, u.email, u.perfil, u.departamento_id, u.ativo, u.notificar_email, u.ver_remuneracao, id);
       if (d.senha) db.prepare('UPDATE usuarios SET senha_hash=? WHERE id=?').run(hashSenha(validarSenha(d.senha)), id);
       if (!u.ativo) db.prepare('DELETE FROM sessoes WHERE usuario_id=?').run(id);
       auditar('core', 'usuario', id, 'atualizar', { ...u, senha: d.senha ? '***' : undefined });
@@ -155,8 +162,10 @@ function criarCoreService(db) {
     }
     const senha = d.senha ? hashSenha(validarSenha(d.senha)) : null;
     const login = d.login ? loginLivre(d.login) : loginLivre(u.email.split('@')[0]);
-    const r = db.prepare(`INSERT INTO usuarios (nome, email, login, senha_hash, perfil, departamento_id, ativo, notificar_email, sso_sub)
-                          VALUES (?,?,?,?,?,?,?,?,?)`).run(u.nome, u.email, login, senha, u.perfil, u.departamento_id, u.ativo, u.notificar_email, d.sso_sub || null);
+    // Usuário criado automaticamente (SSO) nunca nasce com acesso à remuneração
+    if (bootstrap && d.sso_sub) u.ver_remuneracao = 0;
+    const r = db.prepare(`INSERT INTO usuarios (nome, email, login, senha_hash, perfil, departamento_id, ativo, notificar_email, ver_remuneracao, sso_sub)
+                          VALUES (?,?,?,?,?,?,?,?,?,?)`).run(u.nome, u.email, login, senha, u.perfil, u.departamento_id, u.ativo, u.notificar_email, u.ver_remuneracao, d.sso_sub || null);
     auditar('core', 'usuario', Number(r.lastInsertRowid), 'criar', { ...u, login });
     return publico(obterUsuario(Number(r.lastInsertRowid)));
   }
@@ -264,6 +273,7 @@ function criarCoreService(db) {
   return {
     db, eventos, auditar,
     descendentes, deptosVisiveis, podeVer, podeEditar, garantirVer, garantirEditar, exigirPerfil, filtroEscopo,
+    podeVerRemuneracao, exigirRemuneracao,
     registrarEntidade, departamentoDaEntidade,
     listarDepartamentos, obterDepartamento, salvarDepartamento,
     publico, totalUsuarios, obterUsuario, listarUsuarios, diretorio, salvarUsuario, alterarPropriaSenha, preferencias,

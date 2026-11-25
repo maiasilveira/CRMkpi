@@ -96,6 +96,64 @@ test('metas individuais, desdobramento, gatilho corporativo, redutores e meu bô
   assert.match((await req('GET', `/metas/ciclos/${ciclo.id}/individuais.csv`)).body, /Ana Vendas/);
 });
 
+test('remuneração restrita: salários e bônus individuais só com permissão específica', async (t) => {
+  const { req, com, ciclo, entrarComo } = await cenario(t);
+  const meta = (await req('POST', '/metas', { ciclo_id: ciclo.id, departamento_id: com.id, nome: 'Receita', polaridade: 'maior_melhor', peso: 100, gatilho: 80, alvo: 100 })).body;
+  await req('POST', `/metas/${meta.id}/resultados`, { periodo: '2026-06', valor: 100 });
+  const ana = (await req('POST', '/metas/colaboradores', { matricula: '001', nome: 'Ana Vendas', email: 'ana@x.com', departamento_id: com.id, salario: 5000, admissao: '2020-01-01' })).body;
+  await req('POST', `/metas/ciclos/${ciclo.id}/participantes/incluir-todos`, { multiplo_salarios: 2 });
+  await req('PUT', `/metas/ciclos/${ciclo.id}/departamentos/${com.id}/bonus`, { valor_base: 30000 });
+  await req('PUT', `/metas/ciclos/${ciclo.id}/gatilho`, { resultado: 12 });
+  const ocultos = (o) => o.salario === undefined && o.bonus === undefined && o.bonus_alvo === undefined;
+
+  // Diretoria SEM a permissão: não vê salário nem bônus individual, nem exporta o CSV
+  const dir = await entrarComo('dir@x.com', 'senha-diret');
+  assert.ok(ocultos((await dir('GET', '/metas/colaboradores')).body[0]));
+  assert.ok(ocultos((await dir('GET', `/metas/ciclos/${ciclo.id}/participantes`)).body[0]));
+  const indDir = (await dir('GET', `/metas/ciclos/${ciclo.id}/individuais`)).body[0];
+  assert.ok(ocultos(indDir));
+  assert.equal(typeof indDir.nota_final, 'number', 'notas continuam visíveis');
+  assert.equal((await dir('GET', `/metas/ciclos/${ciclo.id}/individuais.csv`)).status, 403);
+  assert.equal((await dir('GET', `/metas/ciclos/${ciclo.id}/apuracao.pdf`)).status, 200, 'PDF sai sem a tabela individual');
+  // ...mas continua vendo os valores por departamento, usados na aprovação
+  assert.equal((await dir('GET', `/metas/ciclos/${ciclo.id}/apuracao`)).body.departamentos[0].valor_base, 30000);
+
+  // Diretoria sem permissão edita cadastro sem apagar o salário, e não consegue informar salário
+  assert.equal((await dir('PUT', `/metas/colaboradores/${ana.id}`, { ...ana, salario: undefined, cargo: 'Vendedora' })).status, 200);
+  assert.equal((await dir('PUT', `/metas/colaboradores/${ana.id}`, { ...ana, salario: 9999 })).status, 403);
+  assert.equal((await dir('POST', '/metas/colaboradores', { matricula: '003', nome: 'C', departamento_id: com.id, salario: 1, admissao: '2020-01-01' })).status, 403);
+  assert.equal((await req('GET', `/metas/colaboradores/${ana.id}`)).body.salario, 5000, 'salário preservado');
+
+  // Gestor e colaborador: nada de bônus individual nem valores em R$ do departamento
+  const gestor = await entrarComo('ges@x.com', 'senha-gestor');
+  assert.ok(ocultos((await gestor('GET', `/metas/ciclos/${ciclo.id}/individuais`)).body[0]));
+  const apG = (await gestor('GET', `/metas/ciclos/${ciclo.id}/apuracao`)).body;
+  assert.equal(apG.departamentos[0].valor_base, undefined);
+  assert.equal(apG.departamentos[0].bonus, undefined);
+  assert.equal(apG.totais.bonus, undefined);
+  assert.equal(typeof apG.departamentos[0].nota, 'number');
+  const anaU = await entrarComo('ana@x.com', 'senha-ana-1');
+  assert.ok(ocultos((await anaU('GET', `/metas/ciclos/${ciclo.id}/individuais`)).body[0]));
+  assert.equal((await anaU('GET', `/metas/ciclos/${ciclo.id}/meu-bonus`)).body.bonus, 10000, 'o próprio bônus continua visível');
+
+  // Admin concede a permissão (auditado); a diretora passa a ver
+  const usuarios = (await req('GET', '/usuarios')).body;
+  const uDir = usuarios.find((u) => u.email === 'dir@x.com');
+  assert.equal(uDir.ver_remuneracao, false);
+  assert.equal((await req('PUT', `/usuarios/${uDir.id}`, { ...uDir, ver_remuneracao: true })).body.ver_remuneracao, true);
+  assert.equal((await dir('GET', '/eu')).body.ver_remuneracao, true);
+  assert.equal((await dir('GET', '/metas/colaboradores')).body[0].salario, 5000);
+  assert.equal((await dir('GET', `/metas/ciclos/${ciclo.id}/individuais`)).body[0].bonus, 10000);
+  assert.equal((await dir('GET', `/metas/ciclos/${ciclo.id}/individuais.csv`)).status, 200);
+  // Salvar o usuário sem o campo mantém a permissão
+  assert.equal((await req('PUT', `/usuarios/${uDir.id}`, { nome: uDir.nome, email: uDir.email, perfil: 'diretoria' })).body.ver_remuneracao, true);
+  const aud = (await req('GET', '/auditoria?entidade=usuario')).body;
+  assert.ok(aud.some((a) => JSON.stringify(a).includes('ver_remuneracao')));
+
+  // A permissão não amplia o escopo: gestor com permissão só vê a própria área, e não pode se conceder
+  assert.equal((await gestor('PUT', `/usuarios/${usuarios.find((u) => u.email === 'ges@x.com').id}`, { nome: 'G', email: 'ges@x.com', perfil: 'gestor', departamento_id: com.id, ver_remuneracao: true })).status, 403);
+});
+
 test('versionamento: alteração em ciclo ativo exige justificativa e aprovação de outra pessoa', async (t) => {
   const { req, com, ciclo, entrarComo, ctx } = await cenario(t);
   const m = (await req('POST', '/metas', { ciclo_id: ciclo.id, departamento_id: com.id, nome: 'Receita', polaridade: 'maior_melhor', peso: 100, gatilho: 80, alvo: 100 })).body;

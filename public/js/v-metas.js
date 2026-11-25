@@ -76,7 +76,7 @@ rota('/metas', async (el, _, q) => {
     ${ehDiretoria() ? `<button class="btn" id="novoCiclo">+ Ciclo</button>${!fechado ? '<button class="btn" id="editCiclo">Regras do ciclo</button>' : ''}
       <details class="menu"><summary class="btn">Relatórios ▾</summary><div>
         <a href="/api/metas/ciclos/${cid}/acordo.pdf" target="_blank">Acordo do programa (PDF)</a><a href="/api/metas/ciclos/${cid}/apuracao.pdf" target="_blank">Apuração (PDF)</a>
-        <a href="/api/metas/ciclos/${cid}/exportar.csv">Metas por departamento (CSV)</a><a href="/api/metas/ciclos/${cid}/individuais.csv">Bônus individual (CSV)</a></div></details>
+        <a href="/api/metas/ciclos/${cid}/exportar.csv">Metas por departamento (CSV)</a>${veRemuneracao() ? `<a href="/api/metas/ciclos/${cid}/individuais.csv">Bônus individual (CSV)</a>` : ''}</div></details>
       ${!fechado ? '<button class="btn" id="encerrar">Encerrar ciclo</button>' : ''}` : ''}</div></div>
   <div class="grid g4" style="margin-bottom:16px">
     <div class="stat"><div class="rot">Ciclo</div><div style="font-weight:600;margin-top:4px">${mesBR(ciclo.inicio)} a ${mesBR(ciclo.fim)} ${selo(ciclo.status)}</div><div class="muted" style="font-size:12px">Nota mínima: ${pct(ciclo.nota_minima)}${ap.congelado ? ' · resultados congelados' : ''}</div></div>
@@ -151,10 +151,10 @@ rota('/metas', async (el, _, q) => {
     const todas = await api(`/metas?ciclo_id=${cid}&individuais=todas`);
     alvo.innerHTML = `<div class="card"><div class="depto-topo"><h2 style="margin:0">Bônus individual</h2>${ehGestorOuMais() && !fechado ? '<button class="btn pri peq" id="novaInd">+ Meta individual</button>' : ''}</div>
       <p class="dica">Nota final = ${fmt(ciclo.peso_departamento_padrao, 0)}% nota do departamento + ${fmt(100 - ciclo.peso_departamento_padrao, 0)}% metas individuais (se houver). Bônus = salário × múltiplo × pró-rata × nota final × (1 − redutores).</p>
-      <div class="tabela-wrap"><table><thead><tr><th>Colaborador</th><th>Departamento</th><th class="num">Meses</th><th class="num">Nota depto</th><th class="num">Nota indiv.</th><th class="num">Nota final</th><th class="num">Redutor</th>${ehDiretoria() ? '<th class="num">Bônus-alvo</th><th class="num">Bônus</th>' : ''}<th>Observações</th></tr></thead><tbody>
+      <div class="tabela-wrap"><table><thead><tr><th>Colaborador</th><th>Departamento</th><th class="num">Meses</th><th class="num">Nota depto</th><th class="num">Nota indiv.</th><th class="num">Nota final</th><th class="num">Redutor</th>${veRemuneracao() ? '<th class="num">Bônus-alvo</th><th class="num">Bônus</th>' : ''}<th>Observações</th></tr></thead><tbody>
       ${lista.map((i) => `<tr><td><b>${esc(i.nome)}</b><div class="muted" style="font-size:12px">${esc(i.matricula)}</div></td><td>${esc(i.departamento)}</td><td class="num">${i.meses_elegiveis}/${i.meses_ciclo}</td>
         <td class="num">${pct(i.nota_departamento)}</td><td class="num">${pct(i.nota_individual)}${i.pesos_individuais_validos ? '' : ' ⚠'}</td><td class="num"><b>${pct(i.nota_final)}</b></td><td class="num">${i.redutor_pct ? pct(i.redutor_pct) : '—'}</td>
-        ${ehDiretoria() ? `<td class="num">${moeda(i.bonus_alvo)}</td><td class="num"><b>${moeda(i.bonus)}</b></td>` : ''}<td class="muted" style="font-size:12px">${esc(i.motivos.join('; '))}</td></tr>`).join('') || `<tr><td colspan="10" class="vazio">Nenhum participante no ciclo${ehDiretoria() ? ' — inclua na aba Participantes' : ''}</td></tr>`}</tbody></table></div></div>
+        ${veRemuneracao() ? `<td class="num">${moeda(i.bonus_alvo)}</td><td class="num"><b>${moeda(i.bonus)}</b></td>` : ''}<td class="muted" style="font-size:12px">${esc(i.motivos.join('; '))}</td></tr>`).join('') || `<tr><td colspan="10" class="vazio">Nenhum participante no ciclo${ehDiretoria() ? ' — inclua na aba Participantes' : ''}</td></tr>`}</tbody></table></div></div>
       <div class="card"><h2>Metas individuais</h2>${tabelaMetas(metasInd.map((m) => ({ ...m, nome: `${m.colaborador}: ${m.nome}` })), { editavel: !fechado && ehGestorOuMais(), lancavel: !fechado && ehGestorOuMais() })}</div>`;
     const abrirInd = (m = {}) => { const c = abrirModal(m.id ? 'Editar meta individual' : 'Nova meta individual', formMeta(m, ciclo, inds, todas, { individual: true, colaboradores: colabs }),
       async (d) => { const r = await api('/metas' + (m.id ? '/' + m.id : ''), { metodo: m.id ? 'PUT' : 'POST', corpo: { ...d, ciclo_id: cid } }); if (r.alteracao_pendente) toast('Alteração enviada para aprovação'); }, { largo: true }); ligarFormMeta(c); };
@@ -171,8 +171,8 @@ rota('/metas', async (el, _, q) => {
   if (aba === 'participantes') {
     const lista = await api(`/metas/ciclos/${cid}/participantes`);
     alvo.innerHTML = `<div class="card"><div class="depto-topo"><h2 style="margin:0">Participantes do ciclo</h2>${!fechado ? '<button class="btn peq" id="incluir">Incluir todos os colaboradores ativos</button>' : ''}</div>
-      <div class="tabela-wrap"><table><thead><tr><th>Colaborador</th><th>Departamento</th><th class="num">Salário</th><th class="num">Múltiplo</th><th class="num">% depto</th><th class="num">Faltas</th><th class="num">Advert.</th><th></th></tr></thead><tbody>
-      ${lista.map((p) => `<tr><td>${esc(p.nome)} <span class="muted">${esc(p.matricula)}</span></td><td>${esc(p.departamento)}</td><td class="num">${moeda(p.salario)}</td><td class="num">${fmt(p.multiplo_salarios)}×</td>
+      <div class="tabela-wrap"><table><thead><tr><th>Colaborador</th><th>Departamento</th>${veRemuneracao() ? '<th class="num">Salário</th>' : ''}<th class="num">Múltiplo</th><th class="num">% depto</th><th class="num">Faltas</th><th class="num">Advert.</th><th></th></tr></thead><tbody>
+      ${lista.map((p) => `<tr><td>${esc(p.nome)} <span class="muted">${esc(p.matricula)}</span></td><td>${esc(p.departamento)}</td>${veRemuneracao() ? `<td class="num">${moeda(p.salario)}</td>` : ''}<td class="num">${fmt(p.multiplo_salarios)}×</td>
         <td class="num">${fmt(p.peso_departamento)}%</td><td class="num">${p.faltas}</td><td class="num">${p.advertencias}</td>
         <td class="linha-acoes">${!fechado ? `<button class="btn peq" data-part="${p.colaborador_id}">Editar</button><button class="btn peq perigo" data-rem="${p.colaborador_id}" aria-label="Remover do ciclo">✕</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum participante</td></tr>'}</tbody></table></div>
       <p class="dica">Cadastre e importe colaboradores em <a href="#/colaboradores">Colaboradores</a>.</p></div>`;
@@ -253,21 +253,21 @@ rota('/colaboradores', async (el, _, q) => {
     ${ehDiretoria() ? '<div class="acoes"><button class="btn" id="importar">Importar planilha</button><button class="btn pri" id="novo">+ Colaborador</button></div>' : ''}</div>
   <div class="card"><form class="filtros" id="filtros"><label>Departamento<select name="departamento_id">${deptoOpcoes(q.departamento_id, 'Todos')}</select></label>
     <label class="check"><input type="checkbox" name="todos" ${q.todos ? 'checked' : ''}> Incluir inativos</label></form>
-  <div class="tabela-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Departamento</th><th>Cargo</th>${ehDiretoria() ? '<th class="num">Salário</th>' : ''}<th>Admissão</th><th>Desligamento</th><th></th></tr></thead><tbody>
+  <div class="tabela-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Departamento</th><th>Cargo</th>${veRemuneracao() ? '<th class="num">Salário</th>' : ''}<th>Admissão</th><th>Desligamento</th><th></th></tr></thead><tbody>
   ${lista.map((c) => `<tr><td>${esc(c.matricula)}</td><td><b>${esc(c.nome)}</b><div class="muted" style="font-size:12px">${esc(c.email || '')}</div></td><td>${esc(c.departamento)}</td><td>${esc(c.cargo || '—')}</td>
-    ${ehDiretoria() ? `<td class="num">${moeda(c.salario)}</td>` : ''}<td>${dataBR(c.admissao)}</td><td>${dataBR(c.desligamento)}</td><td>${ehDiretoria() ? `<button class="btn peq" data-edit="${c.id}">Editar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum colaborador</td></tr>'}</tbody></table></div></div>`;
+    ${veRemuneracao() ? `<td class="num">${moeda(c.salario)}</td>` : ''}<td>${dataBR(c.admissao)}</td><td>${dataBR(c.desligamento)}</td><td>${ehDiretoria() ? `<button class="btn peq" data-edit="${c.id}">Editar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum colaborador</td></tr>'}</tbody></table></div></div>`;
   $('#filtros', el).addEventListener('change', (e) => { const d = dadosForm(e.currentTarget); irPara('#/colaboradores?' + qs({ departamento_id: d.departamento_id, todos: d.todos ? 1 : '' })); });
   const form = (c = {}) => abrirModal(c.id ? 'Editar colaborador' : 'Novo colaborador', `<form><div class="campos">
     <label>Matrícula *<input name="matricula" required value="${esc(c.matricula)}"></label><label class="largo">Nome *<input name="nome" required value="${esc(c.nome)}"></label>
     <label>E-mail (vincula ao usuário)<input type="email" name="email" value="${esc(c.email)}"></label><label>Departamento *<select name="departamento_id" required>${deptoOpcoes(c.departamento_id, 'Selecione…')}</select></label>
-    <label>Cargo<input name="cargo" value="${esc(c.cargo)}"></label><label>Salário base (R$)<input type="number" step="any" min="0" name="salario" value="${esc(c.salario)}"></label>
+    <label>Cargo<input name="cargo" value="${esc(c.cargo)}"></label>${veRemuneracao() ? `<label>Salário base (R$)<input type="number" step="any" min="0" name="salario" value="${esc(c.salario)}"></label>` : ''}
     <label>Admissão *<input type="date" name="admissao" required value="${esc(c.admissao)}"></label><label>Desligamento<input type="date" name="desligamento" value="${esc(c.desligamento)}"></label>
     <label class="check"><input type="checkbox" name="ativo" ${c.ativo === 0 ? '' : 'checked'}> Ativo</label></div>${rodape()}</form>`,
   (d) => api('/metas/colaboradores' + (c.id ? '/' + c.id : ''), { metodo: c.id ? 'PUT' : 'POST', corpo: d }), { largo: true });
   if ($('#novo', el)) $('#novo', el).onclick = () => form();
   el.addEventListener('click', (e) => { const id = e.target.dataset?.edit; if (id) form(lista.find((c) => c.id === +id)); });
   if ($('#importar', el)) $('#importar', el).onclick = () => {
-    const c = abrirModal('Importar colaboradores', `<form><p>Colunas: <code>matricula, nome, email, departamento</code> (nome ou sigla), <code>cargo, salario, admissao, desligamento</code>. Matrículas existentes são atualizadas.</p>
+    const c = abrirModal('Importar colaboradores', `<form><p>Colunas: <code>matricula, nome, email, departamento</code> (nome ou sigla), <code>cargo, ${veRemuneracao() ? 'salario, ' : ''}admissao, desligamento</code>. Matrículas existentes são atualizadas.${veRemuneracao() ? '' : ' A coluna <code>salario</code> só pode ser usada por quem tem acesso à remuneração; sem ela, os salários atuais são mantidos.'}</p>
       <label>Arquivo (.csv ou .xlsx)<input type="file" name="arquivo" accept=".csv,.xlsx" required></label><div id="resImp"></div>
       <div class="rodape-form"><button type="button" class="btn" id="simImp">Validar</button><button class="btn pri">Importar</button></div></form>`);
     const enviar = tentar(async (sim) => {

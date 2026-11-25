@@ -8,9 +8,10 @@ const calc = require('./calculo');
 
 function criarPessoasService(db, core, metas) {
   const audit = (ent, id, acao, dados) => core.auditar('metas', ent, id, acao, dados);
-  // Salário é dado sensível: visível apenas para diretoria/admin
-  const veSalario = () => { const u = usuarioAtual(); return !u || ['admin', 'diretoria'].includes(u.perfil); };
-  const ocultar = (c) => (veSalario() ? c : { ...c, salario: undefined });
+  // Remuneração é dado sensível: salário, bônus-alvo e bônus individual só para admin e quem tem a permissão
+  // "ver_remuneracao" (bônus-alvo = salário × múltiplo × pró-rata, então também revela o salário).
+  const veSalario = () => core.podeVerRemuneracao();
+  const ocultar = (c) => (veSalario() ? c : { ...c, salario: undefined, bonus_alvo: undefined, bonus: undefined, remuneracao_restrita: true });
 
   // ---------- Colaboradores ----------
   function listarColaboradores({ departamento_id, todos } = {}) {
@@ -47,6 +48,12 @@ function criarPessoasService(db, core, metas) {
   }
   function salvarColaborador(d, id) {
     core.exigirPerfil('diretoria');
+    const temSalario = d.salario !== undefined && d.salario !== null && d.salario !== '';
+    if (!veSalario()) {
+      // Sem acesso à remuneração: não informa salário; numa alteração, o salário atual é mantido.
+      E.exigir(!temSalario, 'Informar salário exige acesso à remuneração. Remova o salário ou peça a quem tem esse acesso.', 403);
+      d = { ...d, salario: id ? db.prepare('SELECT salario FROM met_colaboradores WHERE id=?').get(id)?.salario : 0 };
+    }
     const c = normalizar(d);
     const dup = db.prepare('SELECT id FROM met_colaboradores WHERE matricula=? AND id IS NOT ?').get(c.matricula, id ?? null);
     E.exigir(!dup, 'Matrícula já cadastrada');
@@ -80,6 +87,9 @@ function criarPessoasService(db, core, metas) {
           const reg = { matricula: dados.matricula != null ? String(dados.matricula) : '', nome: dados.nome, email: dados.email, departamento_id: dep.id, cargo: dados.cargo,
             salario: numeroDe(dados.salario), admissao: dataDe(dados.admissao), desligamento: dataDe(dados.desligamento) };
           const existente = db.prepare('SELECT id FROM met_colaboradores WHERE matricula=?').get(reg.matricula);
+          if (!veSalario() && reg.salario !== null && reg.salario !== undefined) {
+            throw new E.ErroValidacao('Coluna "salario" exige acesso à remuneração — remova a coluna da planilha', 403);
+          }
           if (simular) { normalizar(reg); resultado.push({ linha, ok: true, matricula: reg.matricula, acao: existente ? 'atualizar' : 'criar' }); } else {
             salvarColaborador(reg, existente?.id);
             resultado.push({ linha, ok: true, matricula: reg.matricula, acao: existente ? 'atualizado' : 'criado' });
@@ -186,6 +196,7 @@ function criarPessoasService(db, core, metas) {
 
   function exportarIndividuaisCsv(cicloId) {
     core.exigirPerfil('diretoria');
+    core.exigirRemuneracao();
     const lista = apurarIndividuais(cicloId);
     const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const cab = ['Matrícula', 'Nome', 'Departamento', 'Salário', 'Múltiplo', 'Meses elegíveis', 'Nota depto', 'Nota individual', 'Nota final', 'Redutor %', 'Bônus-alvo', 'Bônus', 'Observações'];

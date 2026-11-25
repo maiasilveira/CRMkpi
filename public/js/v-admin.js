@@ -26,15 +26,17 @@ rota('/admin/usuarios', async (el) => {
   el.innerHTML = `<div class="cabecalho"><div><h1>Usuários e perfis</h1><div class="muted">Administrador: tudo · Diretoria: todas as áreas, aprovações e encerramento · Gestor: edita a própria área · Colaborador: consulta a própria área</div></div>
     <button class="btn pri" id="novo">+ Usuário</button></div>
   <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>E-mail / login</th><th>Perfil</th><th>Departamento</th><th>Último acesso</th><th>Situação</th><th></th></tr></thead><tbody>
-  ${lista.map((u) => `<tr><td><b>${esc(u.nome)}</b>${u.sso ? ' ' + selo('pendente', 'SSO') : ''}</td><td>${esc(u.email)}<div class="muted" style="font-size:12px">@${esc(u.login)}</div></td><td>${rot(u.perfil)}</td>
+  ${lista.map((u) => `<tr><td><b>${esc(u.nome)}</b>${u.sso ? ' ' + selo('pendente', 'SSO') : ''}${u.ver_remuneracao || u.perfil === 'admin' ? ' <span title="Acesso à remuneração">' + selo('atencao', 'R$') + '</span>' : ''}</td><td>${esc(u.email)}<div class="muted" style="font-size:12px">@${esc(u.login)}</div></td><td>${rot(u.perfil)}</td>
     <td>${esc(u.departamento || '—')}</td><td>${dataHoraBR(u.ultimo_acesso)}</td><td>${u.ativo ? selo('atingido', 'Ativo') : selo('cancelado', 'Inativo')}</td><td><button class="btn peq" data-edit="${u.id}">Editar</button></td></tr>`).join('')}</tbody></table></div></div>`;
   const form = (u = {}) => abrirModal(u.id ? 'Editar usuário' : 'Novo usuário', `<form><div class="campos">
     <label class="largo">Nome *<input name="nome" required value="${esc(u.nome)}"></label><label class="largo">E-mail *<input type="email" name="email" required value="${esc(u.email)}"></label>
     <label>Perfil *<select name="perfil">${opcoes(['admin', 'diretoria', 'gestor', 'colaborador'].map((p) => [p, rot(p)]), u.perfil || 'colaborador')}</select></label>
     <label>Departamento<select name="departamento_id">${deptoOpcoes(u.departamento_id, '—')}</select></label>
     <label>${u.id ? 'Nova senha (deixe em branco para manter)' : 'Senha inicial'}<input type="password" name="senha" minlength="8" autocomplete="new-password" ${u.id ? '' : ''}></label>
-    <label class="check"><input type="checkbox" name="ativo" ${u.ativo === 0 ? '' : 'checked'}> Ativo</label><label class="check"><input type="checkbox" name="notificar_email" ${u.notificar_email === 0 ? '' : 'checked'}> Notificar por e-mail</label></div>
-    <p class="dica">Usuários que entram por SSO podem ficar sem senha. Gestores e colaboradores precisam de departamento.</p>${rodape()}</form>`,
+    <label class="check"><input type="checkbox" name="ativo" ${u.ativo === 0 ? '' : 'checked'}> Ativo</label><label class="check"><input type="checkbox" name="notificar_email" ${u.notificar_email === 0 ? '' : 'checked'}> Notificar por e-mail</label>
+    <label class="check largo"><input type="checkbox" name="ver_remuneracao" ${u.ver_remuneracao ? 'checked' : ''}> Acesso à remuneração (salários e bônus individuais)</label></div>
+    <p class="dica">Usuários que entram por SSO podem ficar sem senha. Gestores e colaboradores precisam de departamento.
+      O acesso à remuneração vale apenas para os departamentos que o usuário já enxerga; administradores sempre têm esse acesso. Cada colaborador sempre vê o próprio bônus.</p>${rodape()}</form>`,
   async (d) => { if (!d.senha) delete d.senha; await api('/usuarios' + (u.id ? '/' + u.id : ''), { metodo: u.id ? 'PUT' : 'POST', corpo: d }); estado.diretorio = await api('/usuarios/diretorio'); });
   $('#novo', el).onclick = () => form();
   el.addEventListener('click', (e) => { const id = e.target.dataset?.edit; if (id) form(lista.find((u) => u.id === +id)); });

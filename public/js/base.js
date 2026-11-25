@@ -112,6 +112,8 @@ const ehAdmin = () => perfil() === 'admin';
 const ehDiretoria = () => ['admin', 'diretoria'].includes(perfil());
 const podeEditarDepto = (id) => ehDiretoria() || (perfil() === 'gestor' && (estado.usuario.departamentos_visiveis || []).includes(Number(id)));
 const ehGestorOuMais = () => ehDiretoria() || perfil() === 'gestor';
+/** Salários e bônus individuais: administrador ou usuário com a permissão "Acesso à remuneração". */
+const veRemuneracao = () => ehAdmin() || !!estado.usuario?.ver_remuneracao;
 const deptoOpcoes = (sel, vazio) => opcoes(estado.departamentos.map((d) => [d.id, d.nome]), sel, vazio);
 const deptoOpcoesEditaveis = (sel, vazio) => opcoes(estado.departamentos.filter((d) => podeEditarDepto(d.id)).map((d) => [d.id, d.nome]), sel, vazio);
 

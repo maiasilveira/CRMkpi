@@ -1,6 +1,7 @@
 'use strict';
 const express = require('express');
 const { pdfAcordo, pdfApuracao } = require('./relatorios');
+const { usuarioAtual: req_usuario } = require('../../core/contexto');
 
 const assinc = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 const planilha = express.raw({ type: () => true, limit: '12mb' });
@@ -17,7 +18,12 @@ function rotasMetas(s, p, core) {
     const c = s.obterCiclo(n(req.params.id));
     res.json(s.salvarCiclo({ ...c, snapshot: undefined, gatilho_corp_resultado: req.body?.resultado }, c.id));
   });
-  r.get('/ciclos/:id/apuracao', (req, res) => res.json(s.apurarCiclo(n(req.params.id))));
+  // Valores em R$ por departamento (verba e bônus da área) só para diretoria/admin, como na interface.
+  const veValoresDepto = () => { const u = req_usuario(); return !u || ['admin', 'diretoria'].includes(u.perfil); };
+  const semValores = (d) => ({ ...d, valor_base: undefined, bonus: undefined, valores_restritos: true });
+  const filtrarApuracao = (ap) => (veValoresDepto() ? ap
+    : { ...ap, departamentos: ap.departamentos.map(semValores), totais: { ...ap.totais, valor_base: undefined, bonus: undefined, pct_pago: undefined } });
+  r.get('/ciclos/:id/apuracao', (req, res) => res.json(filtrarApuracao(s.apurarCiclo(n(req.params.id)))));
   r.post('/ciclos/:id/encerrar', (req, res) => res.json(s.encerrarCiclo(n(req.params.id))));
   r.get('/ciclos/:id/exportar.csv', (req, res) => {
     res.type('text/csv; charset=utf-8').attachment(`apuracao-ciclo-${req.params.id}.csv`).send(s.exportarCsv(n(req.params.id)));
@@ -36,12 +42,17 @@ function rotasMetas(s, p, core) {
     core.exigirPerfil('diretoria');
     const c = s.obterCiclo(n(req.params.id));
     const ap = s.apurarCiclo(c.id);
-    res.type('application/pdf').attachment(`apuracao-${c.nome}.pdf`).send(await pdfApuracao(c, ap, p.apurarIndividuais(c.id, ap)));
+    // Sem acesso à remuneração, o PDF sai sem a tabela de bônus individuais.
+    const individuais = core.podeVerRemuneracao() ? p.apurarIndividuais(c.id, ap) : [];
+    res.type('application/pdf').attachment(`apuracao-${c.nome}.pdf`).send(await pdfApuracao(c, ap, individuais));
   }));
   r.put('/ciclos/:id/departamentos/:did/bonus', (req, res) => res.json(s.definirBonus(n(req.params.id), n(req.params.did), req.body)));
   r.post('/ciclos/:id/departamentos/:did/:acao(submeter|aprovar|reabrir)', (req, res) =>
-    res.json(s.transicionar(n(req.params.id), n(req.params.did), req.params.acao, req.body?.usuario)));
-  r.post('/ciclos/:id/departamentos/:did/simular', (req, res) => res.json(s.simular(n(req.params.id), n(req.params.did), req.body?.valores)));
+    res.json(filtrarApuracao(s.transicionar(n(req.params.id), n(req.params.did), req.params.acao, req.body?.usuario))));
+  r.post('/ciclos/:id/departamentos/:did/simular', (req, res) => {
+    const sim = s.simular(n(req.params.id), n(req.params.did), req.body?.valores);
+    res.json(veValoresDepto() ? sim : semValores(sim));
+  });
 
   // Participantes e bônus individual
   r.get('/ciclos/:id/participantes', (req, res) => res.json(p.listarParticipacoes(n(req.params.id))));

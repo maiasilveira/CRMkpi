@@ -93,5 +93,7 @@ module.exports = function migrarCore(db) {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX ix_anexo_ent ON anexos(modulo, entidade, entidade_id);`,
+    // v4 — permissão específica para dados de remuneração (salários e bônus individuais)
+    (d) => addColuna(d, 'usuarios', 'ver_remuneracao', 'INTEGER NOT NULL DEFAULT 0'),
   ]);
 };
