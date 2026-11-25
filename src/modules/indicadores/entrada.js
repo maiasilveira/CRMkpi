@@ -18,6 +18,11 @@ function criarEntradaService(db, core, ind) {
     const resultado = [];
     const executar = () => {
       for (const { linha, dados } of linhas) {
+        // Linha do modelo deixada sem valor: ignorada (não é erro).
+        if (dados.valor === null || dados.valor === undefined || String(dados.valor).trim() === '') {
+          resultado.push({ linha, ok: true, ignorada: true, codigo: String(dados.codigo ?? '').trim(), periodo: dados.periodo ? periodoDe(dados.periodo) : '' });
+          continue;
+        }
         try {
           const i = ind.porCodigo(String(dados.codigo ?? '').trim());
           E.exigir(i, `Indicador "${dados.codigo}" não encontrado`);
@@ -39,9 +44,62 @@ function criarEntradaService(db, core, ind) {
       }
     };
     if (simular) executar(); else transacao(db, executar);
-    const ok = resultado.filter((r) => r.ok).length;
-    if (!simular) core.auditar('indicadores', 'importacao', null, 'importar', { arquivo: nomeArquivo, ok, erros: resultado.length - ok });
-    return { simulacao: simular, total: resultado.length, importadas: ok, erros: resultado.length - ok, linhas: resultado };
+    const ignoradas = resultado.filter((r) => r.ignorada).length;
+    const ok = resultado.filter((r) => r.ok && !r.ignorada).length;
+    const erros = resultado.filter((r) => !r.ok).length;
+    if (!simular) core.auditar('indicadores', 'importacao', null, 'importar', { arquivo: nomeArquivo, ok, erros, ignoradas });
+    return { simulacao: simular, total: resultado.length - ignoradas, importadas: ok, erros, ignoradas, linhas: resultado };
+  }
+
+  /**
+   * Modelo de importação já preenchido com os indicadores que o usuário pode lançar
+   * (ativos, com código, não calculados, de departamentos que ele edita). As colunas
+   * indicador/departamento/unidade/meta são só para orientação e são ignoradas na importação.
+   */
+  async function modeloImportacao({ formato = 'xlsx', periodo } = {}) {
+    const per = periodo ? E.periodo(periodoDe(periodo)) : periodoAnterior();
+    const inds = ind.listar().filter((i) => i.codigo && i.tipo !== 'calculado' && core.podeEditar(i.departamento_id))
+      .sort((a, b) => a.departamento.localeCompare(b.departamento, 'pt-BR') || a.codigo.localeCompare(b.codigo, 'pt-BR', { numeric: true }));
+    const colunas = ['codigo', 'indicador', 'departamento', 'unidade', 'meta', 'periodo', 'valor', 'comentario'];
+    const linhas = inds.map((i) => [i.codigo, i.nome, i.departamento, i.unidade || '', i.meta, per, null, '']);
+    if (formato === 'csv') {
+      const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      const num = (v) => (typeof v === 'number' ? String(v).replace('.', ',') : v);
+      return { tipo: 'text/csv; charset=utf-8', nome: `modelo-medicoes-${per}.csv`,
+        conteudo: '﻿' + [colunas, ...linhas].map((l) => l.map((v) => esc(num(v))).join(';')).join('\r\n') + '\r\n' };
+    }
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Medições', { views: [{ state: 'frozen', ySplit: 1, xSplit: 2 }] });
+    ws.columns = [
+      { header: 'codigo', key: 'codigo', width: 12 }, { header: 'indicador', key: 'indicador', width: 46 },
+      { header: 'departamento', key: 'departamento', width: 26 }, { header: 'unidade', key: 'unidade', width: 10 },
+      { header: 'meta', key: 'meta', width: 10 }, { header: 'periodo', key: 'periodo', width: 10, style: { numFmt: '@' } },
+      { header: 'valor', key: 'valor', width: 12 }, { header: 'comentario', key: 'comentario', width: 40 },
+    ];
+    for (const l of linhas) ws.addRow(l);
+    const cab = ws.getRow(1);
+    cab.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cab.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2F5BD3' } };
+    // Colunas de orientação em cinza; colunas a preencher em amarelo claro.
+    for (let r = 2; r <= linhas.length + 1; r++) {
+      for (const c of [2, 3, 4, 5]) ws.getCell(r, c).font = { color: { argb: 'FF666666' } };
+      for (const c of [7, 8]) ws.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF8DC' } };
+      ws.getCell(r, 6).numFmt = '@';
+    }
+    const ajuda = wb.addWorksheet('Instruções');
+    ajuda.getColumn(1).width = 110;
+    [
+      'Como preencher',
+      '1. Preencha a coluna "valor" de cada indicador (pode usar vírgula decimal). Linhas sem valor são ignoradas.',
+      '2. Confira a coluna "periodo" (formato AAAA-MM). Para lançar outro mês, altere o período na linha.',
+      '3. "comentario" é opcional.',
+      '4. As colunas indicador, departamento, unidade e meta são apenas para identificação: não altere a coluna "codigo".',
+      '5. No sistema: Importar medições → escolha este arquivo → "Validar (simulação)" → "Importar".',
+      `Gerado em ${new Date().toLocaleString('pt-BR')} com ${linhas.length} indicador(es) que você pode lançar.`,
+    ].forEach((t, i) => { const c = ajuda.getCell(i + 1, 1); c.value = t; if (!i) c.font = { bold: true, size: 13 }; });
+    return { tipo: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', nome: `modelo-medicoes-${per}.xlsx`,
+      conteudo: Buffer.from(await wb.xlsx.writeBuffer()) };
   }
 
   // ---------- Integrações ----------
@@ -107,7 +165,7 @@ function criarEntradaService(db, core, ind) {
     return r;
   }
 
-  return { importarMedicoes, listarIntegracoes, salvarIntegracao, excluirIntegracao, executarIntegracao, executarTodas, valorPorCaminho };
+  return { importarMedicoes, modeloImportacao, listarIntegracoes, salvarIntegracao, excluirIntegracao, executarIntegracao, executarTodas, valorPorCaminho };
 }
 
 module.exports = { criarEntradaService };

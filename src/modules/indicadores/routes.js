@@ -16,6 +16,10 @@ function rotasIndicadores(s, { entrada, ia }) {
   r.put('/objetivos/:oid', (req, res) => res.json(s.salvarObjetivo(req.body, id(req, 'oid'))));
   r.delete('/objetivos/:oid', (req, res) => { s.excluirObjetivo(id(req, 'oid')); res.status(204).end(); });
 
+  r.get('/importar/modelo', assinc(async (req, res) => {
+    const m = await entrada.modeloImportacao({ formato: req.query.formato === 'csv' ? 'csv' : 'xlsx', periodo: req.query.periodo });
+    res.type(m.tipo).attachment(m.nome).send(m.conteudo);
+  }));
   r.post('/importar', express.raw({ type: () => true, limit: '12mb' }), assinc(async (req, res) =>
     res.json(await entrada.importarMedicoes(req.query.nome, req.body, { simular: req.query.simular === '1' }))));
   r.get('/integracoes', (req, res) => res.json(entrada.listarIntegracoes()));

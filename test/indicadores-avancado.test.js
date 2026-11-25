@@ -174,6 +174,55 @@ test('importação de medições por CSV e XLSX (com simulação)', async (t) =>
   assert.equal((await enviar('m.pdf', Buffer.from('x'))).status, 400);
 });
 
+test('modelo de importação com código e nome dos indicadores; linhas sem valor são ignoradas', async (t) => {
+  const { req, novo, entrarComo } = await base(t);
+  await novo({ codigo: 'COM-02', nome: 'Conversão; propostas', meta: 30, unidade: '%' });
+  await novo({ codigo: 'COM-01', nome: 'Receita líquida', meta: 1200, unidade: 'R$ mil' });
+  await novo({ nome: 'Sem código', meta: 1 });
+  await novo({ codigo: 'CALC', nome: 'Calculado', meta: 1, tipo: 'calculado', formula_calculo: '{COM-01} * 2' });
+  const outro = (await req('POST', '/departamentos', { nome: 'Financeiro' })).body;
+  await req('POST', '/indicadores', { departamento_id: outro.id, polaridade: 'maior_melhor', codigo: 'FIN-01', nome: 'Inadimplência', meta: 3 });
+  const importar = (nome, buf) => req('POST', `/indicadores/importar?nome=${nome}`, buf, { headers: { 'Content-Type': 'application/octet-stream' } }).then((r) => r.body);
+
+  // CSV: só indicadores com código e não calculados; colunas de identificação + período pedido
+  const modeloCsv = (await req('GET', '/indicadores/importar/modelo?formato=csv&periodo=2026-05')).body;
+  const linhasCsv = modeloCsv.replace(/^﻿/, '').trim().split(/\r\n/);
+  assert.equal(linhasCsv[0], 'codigo;indicador;departamento;unidade;meta;periodo;valor;comentario');
+  assert.deepEqual(linhasCsv.slice(1).map((l) => l.split(';')[0]), ['COM-01', 'COM-02', 'FIN-01']);
+  assert.ok(linhasCsv.some((l) => l.startsWith('COM-02;"Conversão; propostas";Comercial;%;30;2026-05;;')), 'nome com ; vem entre aspas');
+
+  // Preenche só COM-01 e reimporta: 1 importada, demais ignoradas (sem erro)
+  const preenchido = modeloCsv.replace('COM-01;Receita líquida;Comercial;R$ mil;1200;2026-05;;', 'COM-01;Receita líquida;Comercial;R$ mil;1200;2026-05;1250,5;');
+  const imp = await importar('m.csv', Buffer.from(preenchido));
+  assert.equal(imp.importadas, 1);
+  assert.equal(imp.erros, 0);
+  assert.equal(imp.ignoradas, 2);
+  assert.equal((await req('GET', '/indicadores')).body.find((i) => i.codigo === 'COM-01').ultima_medicao.valor, 1250.5);
+
+  // XLSX: mesmo conteúdo, período como texto; preenchido no Excel e reimportado
+  const rx = await req('GET', '/indicadores/importar/modelo?formato=xlsx&periodo=2026-06', undefined, { binario: true });
+  assert.equal(rx.status, 200);
+  assert.match(rx.headers.get('content-disposition'), /modelo-medicoes-2026-06\.xlsx/);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(rx.body);
+  const ws = wb.getWorksheet('Medições');
+  assert.deepEqual(ws.getRow(1).values.slice(1), ['codigo', 'indicador', 'departamento', 'unidade', 'meta', 'periodo', 'valor', 'comentario']);
+  assert.deepEqual([ws.getCell('A2').value, ws.getCell('B2').value, ws.getCell('F2').value], ['COM-01', 'Receita líquida', '2026-06']);
+  assert.equal(ws.getCell('F2').numFmt, '@');
+  assert.ok(wb.getWorksheet('Instruções'));
+  ws.getCell('G3').value = 31.5; // COM-02
+  const impX = await importar('m.xlsx', Buffer.from(await wb.xlsx.writeBuffer()));
+  assert.deepEqual([impX.importadas, impX.erros, impX.ignoradas], [1, 0, 2]);
+  assert.equal(impX.linhas.find((l) => !l.ignorada).periodo, '2026-06');
+
+  // Gestor de outra área só recebe os indicadores que pode lançar
+  await req('POST', '/usuarios', { nome: 'Fin', email: 'fin@x.com', senha: 'senha-fin-1', perfil: 'gestor', departamento_id: outro.id });
+  const fin = await entrarComo('fin@x.com', 'senha-fin-1');
+  const csvFin = (await fin('GET', '/indicadores/importar/modelo?formato=csv')).body.replace(/^﻿/, '').trim().split(/\r\n/);
+  assert.deepEqual(csvFin.slice(1).map((l) => l.split(';')[0]), ['FIN-01']);
+  assert.equal((await req('GET', '/indicadores/importar/modelo?periodo=abc')).status, 400);
+});
+
 test('integração HTTP/JSON coleta o valor do indicador', async (t) => {
   const api = http.createServer((rq, rs) => {
     if (rq.headers['x-api-key'] !== 'segredo') { rs.statusCode = 401; return rs.end(); }

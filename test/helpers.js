@@ -13,6 +13,7 @@ function cliente(base) {
     const sc = r.headers.get('set-cookie');
     if (sc) cookie = sc.split(';')[0];
     const tipo = r.headers.get('content-type') || '';
+    if (extra.binario) return { status: r.status, body: Buffer.from(await r.arrayBuffer()), headers: r.headers };
     const txt = tipo.includes('pdf') ? null : await r.text();
     let json = txt; try { json = txt ? JSON.parse(txt) : null; } catch { /* texto */ }
     return { status: r.status, body: json, headers: r.headers };

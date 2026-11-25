@@ -323,16 +323,26 @@ rota('/importar', async (el) => {
   el.innerHTML = `<div class="cabecalho"><h1>Importar medições</h1></div><div class="card">
     <p>Envie uma planilha <b>.xlsx</b> ou <b>.csv</b> (separador ; ou ,) com as colunas <code>codigo</code>, <code>periodo</code>, <code>valor</code> e, opcionalmente, <code>comentario</code>.
     Períodos aceitos: <code>2026-03</code>, <code>03/2026</code> ou uma data. Valores podem usar vírgula decimal.</p>
-    <a class="btn peq" id="modelo" download="modelo-importacao.csv">Baixar modelo CSV</a>
+    <p class="dica">O modelo já vem com os indicadores que você pode lançar (código, nome, departamento, unidade e meta, para identificação) e o período escolhido.
+      Basta preencher a coluna <code>valor</code>; linhas deixadas em branco são ignoradas. Prefira o modelo Excel: no CSV, o Excel pode transformar o período em data.</p>
+    <div class="filtros"><label>Período do modelo<input type="month" id="perModelo"></label>
+      <a class="btn peq" id="modeloXlsx">Baixar modelo Excel (.xlsx)</a><a class="btn peq" id="modeloCsv">Baixar modelo CSV</a></div>
     <form id="fImp" class="filtros" style="margin-top:12px"><label style="flex:1">Arquivo<input type="file" name="arquivo" accept=".csv,.xlsx" required></label>
     <button type="button" class="btn" id="simular">Validar (simulação)</button><button class="btn pri">Importar</button></form><div id="resultado"></div></div>`;
-  $('#modelo', el).href = URL.createObjectURL(new Blob(['﻿codigo;periodo;valor;comentario\nCOM-01;2026-03;1250,5;Fechamento do mês\n'], { type: 'text/csv' }));
+  const hoje = new Date(); const ant = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+  $('#perModelo', el).value = `${ant.getFullYear()}-${String(ant.getMonth() + 1).padStart(2, '0')}`;
+  const linksModelo = () => {
+    const per = $('#perModelo', el).value;
+    $('#modeloXlsx', el).href = '/api/indicadores/importar/modelo?' + qs({ formato: 'xlsx', periodo: per });
+    $('#modeloCsv', el).href = '/api/indicadores/importar/modelo?' + qs({ formato: 'csv', periodo: per });
+  };
+  linksModelo(); $('#perModelo', el).addEventListener('change', linksModelo);
   const enviar = tentar(async (simular) => {
     const f = $('[name=arquivo]', el).files[0]; if (!f) { toast('Escolha um arquivo', true); return; }
     const r = await enviarArquivo('/indicadores/importar', f, simular ? { simular: 1 } : {});
-    $('#resultado', el).innerHTML = `<div class="aviso ${r.erros ? 'erro' : ''}">${r.simulacao ? 'Simulação: ' : ''}${r.importadas} de ${r.total} linha(s) ${r.simulacao ? 'válidas' : 'importadas'}${r.erros ? `, ${r.erros} com erro` : ''}.</div>
+    $('#resultado', el).innerHTML = `<div class="aviso ${r.erros ? 'erro' : ''}">${r.simulacao ? 'Simulação: ' : ''}${r.importadas} de ${r.total} linha(s) ${r.simulacao ? 'válidas' : 'importadas'}${r.erros ? `, ${r.erros} com erro` : ''}${r.ignoradas ? ` · ${r.ignoradas} ignorada(s) por estar sem valor` : ''}.</div>
       <div class="tabela-wrap"><table><thead><tr><th>Linha</th><th>Resultado</th><th>Indicador</th><th>Período</th><th class="num">Valor</th></tr></thead><tbody>
-      ${r.linhas.map((l) => `<tr><td>${l.linha}</td><td>${l.ok ? selo(l.status || 'atingido', l.status ? rot(l.status) : 'OK') : selo('desvio', 'Erro') + ' ' + esc(l.erro)}</td><td>${esc(l.codigo || '')}</td><td>${esc(l.periodo || '')}</td><td class="num">${fmt(l.valor)}</td></tr>`).join('')}</tbody></table></div>`;
+      ${r.linhas.filter((l) => !l.ignorada).map((l) => `<tr><td>${l.linha}</td><td>${l.ok ? selo(l.status || 'atingido', l.status ? rot(l.status) : 'OK') : selo('desvio', 'Erro') + ' ' + esc(l.erro)}</td><td>${esc(l.codigo || '')}</td><td>${esc(l.periodo || '')}</td><td class="num">${fmt(l.valor)}</td></tr>`).join('')}</tbody></table></div>`;
     if (!simular) toast('Importação concluída');
   });
   $('#simular', el).onclick = () => enviar(true);
