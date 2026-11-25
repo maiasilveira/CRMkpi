@@ -143,6 +143,37 @@ async function render() {
   el.innerHTML = '<div class="card vazio">Página não encontrada</div>';
 }
 
+// ============ Tabelas ordenáveis ============
+// colunas: [{ id, titulo, cls?, valor?(item) }]; sem "valor" a coluna não é ordenável.
+// ordem: { col, dir: 1 | -1 }. Valores vazios (null/undefined/'') ficam sempre no fim.
+const COMPARA_TEXTO = new Intl.Collator('pt-BR', { numeric: true, sensitivity: 'base' });
+function ordenarLista(lista, colunas, ordem) {
+  const c = colunas.find((x) => x.id === ordem?.col);
+  if (!c?.valor) return lista;
+  const vazio = (v) => v === null || v === undefined || v === '' || (typeof v === 'number' && Number.isNaN(v));
+  return lista.map((item, i) => ({ item, i, v: c.valor(item) })).sort((a, b) => {
+    if (vazio(a.v) || vazio(b.v)) return vazio(a.v) === vazio(b.v) ? a.i - b.i : vazio(a.v) ? 1 : -1;
+    const r = typeof a.v === 'number' && typeof b.v === 'number' ? a.v - b.v : COMPARA_TEXTO.compare(String(a.v), String(b.v));
+    return r * ordem.dir || a.i - b.i;
+  }).map((x) => x.item);
+}
+const cabecalhoOrdenavel = (colunas, ordem) => `<tr>${colunas.map((c) => {
+  if (!c.valor) return `<th class="${c.cls || ''}">${esc(c.titulo)}</th>`;
+  const ativa = ordem?.col === c.id;
+  const sort = ativa ? (ordem.dir === 1 ? 'ascending' : 'descending') : 'none';
+  return `<th class="${c.cls || ''}" aria-sort="${sort}"><button type="button" class="th-ordenar${ativa ? ' ativa' : ''}" data-ordenar="${c.id}"
+    title="Ordenar por ${esc(c.titulo.toLowerCase())}">${esc(c.titulo)}<span class="seta" aria-hidden="true">${ativa ? (ordem.dir === 1 ? '▲' : '▼') : '↕'}</span></button></th>`;
+}).join('')}</tr>`;
+/** Liga os cliques do cabeçalho: mesma coluna inverte o sentido; outra coluna começa crescente. */
+function ligarOrdenacao(raiz, ordemAtual, aoMudar) {
+  raiz.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ordenar]'); if (!b) return;
+    const col = b.dataset.ordenar;
+    const nova = ordemAtual()?.col === col ? { col, dir: -ordemAtual().dir } : { col, dir: 1 };
+    aoMudar(nova);
+  });
+}
+
 // ============ Componentes visuais ============
 const barra = (v, max = 120) => {
   if (v === null || v === undefined) return '<span class="muted">—</span>';

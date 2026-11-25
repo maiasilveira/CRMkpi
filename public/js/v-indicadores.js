@@ -50,6 +50,22 @@ function ligarFormIndicador(corpo) {
   $('#tipoInd', corpo).onchange = sync; sync();
 }
 
+// Ordenação da lista (clicando nos títulos das colunas). Status e tendência seguem a gravidade, não o alfabeto.
+const PESO_STATUS = { desvio: 0, atencao: 1, atingido: 2, sem_medicao: 3 };
+const PESO_TENDENCIA = { piorando: 0, variando: 1, estavel: 2, melhorando: 3 };
+const COLUNAS_INDICADORES = [
+  { id: 'indicador', titulo: 'Indicador', valor: (i) => `${i.codigo || ''} ${i.nome}`.trim() },
+  { id: 'departamento', titulo: 'Departamento', valor: (i) => i.departamento },
+  { id: 'meta', titulo: 'Meta / range', valor: (i) => i.meta },
+  { id: 'ultimo', titulo: 'Último', cls: 'num', valor: (i) => i.ultima_medicao?.valor },
+  { id: 'status', titulo: 'Status', valor: (i) => PESO_STATUS[i.ultima_medicao?.status || 'sem_medicao'] },
+  { id: 'desvio', titulo: 'Desvio', cls: 'num', valor: (i) => i.desvio_pct },
+  { id: 'tendencia', titulo: 'Tendência', valor: (i) => PESO_TENDENCIA[i.tendencia] },
+  { id: 'pendencias', titulo: 'Pendências', valor: (i) => -((i.analises_pendentes || 0) * 1000 + (i.planos_abertos || 0)) },
+];
+let ordemIndicadores = null;
+try { ordemIndicadores = JSON.parse(sessionStorage.getItem('ordemIndicadores') || 'null'); } catch { ordemIndicadores = null; }
+
 rota('/indicadores', async (el, _, q) => {
   const lista = await api('/indicadores?' + qs(q));
   el.innerHTML = `<div class="cabecalho"><h1>Indicadores de desempenho</h1><div class="acoes">
@@ -60,14 +76,24 @@ rota('/indicadores', async (el, _, q) => {
     <label>Status atual<select name="status">${opcoes([['atingido', 'Atingido'], ['atencao', 'Atenção'], ['desvio', 'Desvio'], ['sem_medicao', 'Sem medição']], q.status, 'Todos')}</select></label>
     ${Object.values(q).some(Boolean) ? '<a class="btn peq" href="#/indicadores">Limpar filtros</a>' : ''}
   </form>
-  <div class="tabela-wrap"><table><thead><tr><th>Indicador</th><th>Departamento</th><th>Meta / range</th><th class="num">Último</th><th>Status</th><th class="num">Desvio</th><th>Tendência</th><th>Pendências</th></tr></thead><tbody>
-  ${lista.map((i) => `<tr><td><a href="#/indicadores/${i.id}"><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b></a>${i.tipo === 'calculado' ? ' ' + selo('pendente', 'ƒ calculado') : ''}</td><td>${esc(i.departamento)}</td>
+  <div class="tabela-wrap" id="tabIndicadores"></div></div>`;
+  const desenhar = () => {
+    $('#tabIndicadores', el).innerHTML = `<table><thead>${cabecalhoOrdenavel(COLUNAS_INDICADORES, ordemIndicadores)}</thead><tbody>
+  ${ordenarLista(lista, COLUNAS_INDICADORES, ordemIndicadores).map((i) => `<tr><td><a href="#/indicadores/${i.id}"><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b></a>${i.tipo === 'calculado' ? ' ' + selo('pendente', 'ƒ calculado') : ''}</td><td>${esc(i.departamento)}</td>
     <td class="muted">${esc(faixaTexto(i))}</td>
     <td class="num">${i.ultima_medicao ? fmt(i.ultima_medicao.valor) + ' <span class="muted">' + mesBR(i.ultima_medicao.periodo) + '</span>' : '—'}</td>
     <td>${selo(i.ultima_medicao?.status || 'sem_medicao')}</td><td class="num">${i.desvio_pct === null ? '—' : (i.desvio_pct > 0 ? '+' : '') + fmt(i.desvio_pct, 1) + '%'}</td>
     <td>${selo(i.tendencia)}</td>
     <td>${i.analises_pendentes ? selo('desvio', i.analises_pendentes + ' sem análise') : ''} ${i.planos_abertos ? selo('em_andamento', i.planos_abertos + ' plano(s)') : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum indicador encontrado</td></tr>'}
-  </tbody></table></div></div>`;
+  </tbody></table>`;
+  };
+  desenhar();
+  ligarOrdenacao($('#tabIndicadores', el), () => ordemIndicadores, (nova) => {
+    ordemIndicadores = nova;
+    try { sessionStorage.setItem('ordemIndicadores', JSON.stringify(nova)); } catch { /* sem armazenamento */ }
+    desenhar();
+    $(`[data-ordenar="${nova.col}"]`, el)?.focus();
+  });
   $('#filtros', el).addEventListener('change', (e) => irPara('#/indicadores?' + qs(dadosForm(e.currentTarget))));
   if ($('#novo', el)) $('#novo', el).onclick = tentar(async () => {
     const corpo = abrirModal('Novo indicador', await formIndicador(), async (d) => { const n = await api('/indicadores', { metodo: 'POST', corpo: d }); cacheObjetivos = null; cacheResponsaveis = null; irPara('#/indicadores/' + n.id); toast('Indicador criado'); return false; }, { largo: true });

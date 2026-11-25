@@ -67,6 +67,12 @@ table { width: 100%; border-collapse: collapse; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--borda); text-align: left; vertical-align: top; }
 th { font-size: 12px; color: var(--txt2); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
 tr:last-child td { border-bottom: none; }
+.th-ordenar { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; border-radius: 4px; }
+.th-ordenar:hover, .th-ordenar.ativa { color: var(--txt); }
+.th-ordenar:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
+.th-ordenar .seta { font-size: 10px; opacity: .45; }
+.th-ordenar.ativa .seta { opacity: 1; color: var(--pri); }
+th.num .th-ordenar { flex-direction: row-reverse; }
 tbody tr:hover { background: var(--sup2); }
 
 /* Selos */
