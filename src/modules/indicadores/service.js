@@ -80,8 +80,12 @@ function criarIndicadoresService(db, core) {
     };
   }
 
-  function listar({ departamento_id, status, todos } = {}) {
+  /** Filtro "contém", sem diferenciar maiúsculas/minúsculas. */
+  const contem = (t) => `%${String(t).trim().toLowerCase()}%`;
+
+  function listar({ departamento_id, status, todos, responsavel } = {}) {
     const cond = []; const args = [];
+    if (responsavel) { cond.push('LOWER(COALESCE(i.responsavel, \'\')) LIKE ?'); args.push(contem(responsavel)); }
     if (!todos) cond.push('i.ativo = 1');
     const f = core.filtroEscopo('i.departamento_id');
     if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
@@ -89,7 +93,7 @@ function criarIndicadoresService(db, core) {
     const lista = db.prepare(`SELECT i.*, d.nome AS departamento FROM ind_indicadores i
         JOIN departamentos d ON d.id = i.departamento_id
         ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''} ORDER BY d.nome, i.nome`).all(...args).map(enriquecer);
-    return status ? lista.filter((i) => i.ultima_medicao?.status === status) : lista;
+    return status ? lista.filter((i) => (i.ultima_medicao?.status || 'sem_medicao') === status) : lista;
   }
 
   function obter(id) {
@@ -324,11 +328,18 @@ function criarIndicadoresService(db, core) {
     };
   }
 
-  function listarPlanos({ indicador_id, departamento_id, status, atrasados, ordem } = {}) {
+  function listarPlanos({ indicador_id, departamento_id, status, atrasados, ordem, responsavel } = {}) {
     const cond = []; const args = [];
     if (indicador_id) { cond.push('p.indicador_id=?'); args.push(Number(indicador_id)); }
     if (departamento_id) { cond.push('i.departamento_id=?'); args.push(Number(departamento_id)); }
-    if (status) { cond.push('p.status=?'); args.push(status); }
+    // "abertos" agrupa os planos ainda não encerrados (aberto + em andamento)
+    if (status === 'abertos') cond.push("p.status IN ('aberto','em_andamento')");
+    else if (status) { cond.push('p.status=?'); args.push(status); }
+    // Responsável do plano ou de qualquer ação dele
+    if (responsavel) {
+      cond.push(`(LOWER(COALESCE(p.responsavel, '')) LIKE ? OR EXISTS (SELECT 1 FROM ind_acoes a WHERE a.plano_id=p.id AND LOWER(a.quem) LIKE ?))`);
+      args.push(contem(responsavel), contem(responsavel));
+    }
     const f = core.filtroEscopo('i.departamento_id');
     if (f.sql) { cond.push('1=1' + f.sql); args.push(...f.args); }
     let planos = db.prepare(`SELECT p.id FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id
@@ -610,6 +621,16 @@ function criarIndicadoresService(db, core) {
       sem_objetivo: inds.filter((i) => !i.objetivo_id).length };
   }
 
+  /** Nomes de responsáveis (indicadores, planos e ações) visíveis ao usuário, para os filtros. */
+  function listarResponsaveis() {
+    const f = core.filtroEscopo('i.departamento_id');
+    const nomes = db.prepare(`SELECT i.responsavel n FROM ind_indicadores i WHERE i.ativo=1 ${f.sql}
+        UNION SELECT p.responsavel FROM ind_planos p JOIN ind_indicadores i ON i.id=p.indicador_id WHERE 1=1 ${f.sql}
+        UNION SELECT a.quem FROM ind_acoes a JOIN ind_planos p ON p.id=a.plano_id JOIN ind_indicadores i ON i.id=p.indicador_id WHERE 1=1 ${f.sql}`)
+      .all(...f.args, ...f.args, ...f.args).map((r) => (r.n || '').trim()).filter(Boolean);
+    return [...new Set(nomes)].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }
+
   // ---------------- Painel / alertas ----------------
   function painel() {
     const inds = listar();
@@ -678,7 +699,7 @@ function criarIndicadoresService(db, core) {
     db, metaVigente, recalcularIndicador, porCodigo,
     listarMetasPeriodo, salvarMetaPeriodo, excluirMetaPeriodo, listarVersoes, cartaControle,
     salvarObjetivo, excluirObjetivo, mapaEstrategico, listarPerspectivas, salvarPerspectivas,
-    listar, obter, salvar, excluir,
+    listar, obter, salvar, excluir, listarResponsaveis,
     listarMedicoes, registrarMedicao, excluirMedicao,
     listarAnalises, obterAnalise, registrarAnalise, excluirAnalise,
     listarPlanos, obterPlano, criarPlano, atualizarPlano, excluirPlano,

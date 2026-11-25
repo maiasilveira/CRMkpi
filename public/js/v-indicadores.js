@@ -56,7 +56,9 @@ rota('/indicadores', async (el, _, q) => {
     ${ehGestorOuMais() ? '<a class="btn" href="#/importar">Importar planilha</a><button class="btn pri" id="novo">+ Novo indicador</button>' : ''}</div></div>
   <div class="card"><form class="filtros" id="filtros">
     <label>Departamento<select name="departamento_id">${deptoOpcoes(q.departamento_id, 'Todos')}</select></label>
-    <label>Status atual<select name="status">${opcoes([['atingido', 'Atingido'], ['atencao', 'Atenção'], ['desvio', 'Desvio']], q.status, 'Todos')}</select></label>
+    <label>Responsável<select name="responsavel">${await responsavelOpcoes(q.responsavel)}</select></label>
+    <label>Status atual<select name="status">${opcoes([['atingido', 'Atingido'], ['atencao', 'Atenção'], ['desvio', 'Desvio'], ['sem_medicao', 'Sem medição']], q.status, 'Todos')}</select></label>
+    ${Object.values(q).some(Boolean) ? '<a class="btn peq" href="#/indicadores">Limpar filtros</a>' : ''}
   </form>
   <div class="tabela-wrap"><table><thead><tr><th>Indicador</th><th>Departamento</th><th>Meta / range</th><th class="num">Último</th><th>Status</th><th class="num">Desvio</th><th>Tendência</th><th>Pendências</th></tr></thead><tbody>
   ${lista.map((i) => `<tr><td><a href="#/indicadores/${i.id}"><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b></a>${i.tipo === 'calculado' ? ' ' + selo('pendente', 'ƒ calculado') : ''}</td><td>${esc(i.departamento)}</td>
@@ -68,7 +70,7 @@ rota('/indicadores', async (el, _, q) => {
   </tbody></table></div></div>`;
   $('#filtros', el).addEventListener('change', (e) => irPara('#/indicadores?' + qs(dadosForm(e.currentTarget))));
   if ($('#novo', el)) $('#novo', el).onclick = tentar(async () => {
-    const corpo = abrirModal('Novo indicador', await formIndicador(), async (d) => { const n = await api('/indicadores', { metodo: 'POST', corpo: d }); cacheObjetivos = null; irPara('#/indicadores/' + n.id); toast('Indicador criado'); return false; }, { largo: true });
+    const corpo = abrirModal('Novo indicador', await formIndicador(), async (d) => { const n = await api('/indicadores', { metodo: 'POST', corpo: d }); cacheObjetivos = null; cacheResponsaveis = null; irPara('#/indicadores/' + n.id); toast('Indicador criado'); return false; }, { largo: true });
     ligarFormIndicador(corpo); fecharModalSeNavegar();
   });
 });
@@ -137,8 +139,8 @@ function montarConteudoAnalise(d, form) {
 
 function abrirAnalise(med) {
   const corpo = abrirModal('Análise de desvio', `<form id="fAnalise"><p class="muted" style="margin-top:0">Período <b>${mesBR(med.periodo)}</b> · valor ${fmt(med.valor)} · meta ${fmt(med.meta)} · ${selo(med.status)}</p>
-    <div class="campos"><label>Técnica *<select name="tecnica" id="tecnica">${opcoes([['5w2h', '5W2H — descrição estruturada do desvio'], ['5porques', '5 Porquês — aprofundamento até a causa raiz'],
-      ['ishikawa', 'Ishikawa / 6M — espinha de peixe'], ['pareto', 'Pareto — causas mais frequentes'], ['a3', 'Relatório A3 — resolução estruturada'], ['arvore', 'Árvore de falhas — combinação de causas']], '5w2h')}</select></label>
+    <div class="campos"><label>Técnica *<select name="tecnica" id="tecnica">${opcoes([['5porques', '5 Porquês — aprofundamento até a causa raiz'], ['5w2h', '5W2H — descrição estruturada do desvio'],
+      ['ishikawa', 'Ishikawa / 6M — espinha de peixe'], ['pareto', 'Pareto — causas mais frequentes'], ['a3', 'Relatório A3 — resolução estruturada'], ['arvore', 'Árvore de falhas — combinação de causas']], '5porques')}</select></label>
     <label>Responsável pela análise<input name="responsavel" value="${esc(estado.usuario.nome)}"></label></div>
     <div class="assistente"><button type="button" class="btn peq" id="sugerir">✨ Sugerir causas e ações</button><div id="sugestoes"></div></div>
     <div id="camposTecnica"></div>
@@ -277,7 +279,7 @@ rota('/indicadores/:id', async (el, { id }, q) => {
   }
   if (aba === 'colab') await painelColaboracao(alvo, 'indicadores', 'indicador', id, { podeAnexar: editavel });
 
-  if ($('#editar', el)) $('#editar', el).onclick = tentar(async () => { const c = abrirModal('Editar indicador', await formIndicador(ind), async (d) => { await api('/indicadores/' + id, { metodo: 'PUT', corpo: d }); cacheObjetivos = null; toast('Indicador atualizado'); }, { largo: true }); ligarFormIndicador(c); });
+  if ($('#editar', el)) $('#editar', el).onclick = tentar(async () => { const c = abrirModal('Editar indicador', await formIndicador(ind), async (d) => { await api('/indicadores/' + id, { metodo: 'PUT', corpo: d }); cacheObjetivos = null; cacheResponsaveis = null; toast('Indicador atualizado'); }, { largo: true }); ligarFormIndicador(c); });
   if ($('#excluir', el)) $('#excluir', el).onclick = tentar(async () => { if (!confirmar('Excluir o indicador e todo o histórico (medições, análises e planos)?')) return; await api('/indicadores/' + id, { metodo: 'DELETE' }); irPara('#/indicadores'); toast('Indicador excluído'); });
   el.addEventListener('click', tentar(async (e) => {
     const b = e.target.closest('button'); if (!b) return;

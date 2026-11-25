@@ -225,3 +225,18 @@ test('assistente: histórico local e Claude (cliente simulado) com saída estrut
   assert.equal(chamada.fallbacks, 'default');
   assert.match(chamada.messages[0].content, /Sem padrão de setup/);
 });
+
+test('filtros por responsável, status "sem medição" e planos em aberto', async (t) => {
+  const { req, novo } = await base(t);
+  const a = await novo({ codigo: 'R1', nome: 'Receita', meta: 10, responsavel: 'Ana Souza' });
+  const b = await novo({ codigo: 'R2', nome: 'Custo', meta: 10, responsavel: 'Bruno Lima' });
+  await req('POST', `/indicadores/${a.id}/medicoes`, { periodo: '2026-01', valor: 12 });
+  assert.deepEqual((await req('GET', '/indicadores?responsavel=ana')).body.map((i) => i.codigo), ['R1']);
+  assert.deepEqual((await req('GET', '/indicadores?status=sem_medicao')).body.map((i) => i.codigo), ['R2']);
+  const p1 = (await req('POST', '/planos', { indicador_id: a.id, titulo: 'Plano da Ana', responsavel: 'Ana Souza' })).body;
+  await req('POST', '/planos', { indicador_id: b.id, titulo: 'Plano do Bruno', acoes: [{ o_que: 'X', quando: '2026-02-01', quem: 'Carla Mendes', status: 'concluida' }] });
+  assert.deepEqual((await req('GET', '/planos?responsavel=carla')).body.map((p) => p.titulo), ['Plano do Bruno'], 'responsável de ação também conta');
+  await req('PUT', `/planos/${p1.id}`, { status: 'cancelado' });
+  assert.deepEqual((await req('GET', '/planos?status=abertos')).body.map((p) => p.titulo), ['Plano do Bruno']);
+  assert.deepEqual((await req('GET', '/indicadores/responsaveis')).body, ['Ana Souza', 'Bruno Lima', 'Carla Mendes']);
+});
