@@ -78,6 +78,7 @@ function abrirModal(titulo, html, aoEnviar, { largo = false } = {}) {
   $('#modalCorpo').innerHTML = html;
   $('.modal-caixa').classList.toggle('largo', largo);
   $('#modal').hidden = false;
+  modalAlterado = false;
   const form = $('#modalCorpo form');
   if (form && aoEnviar) {
     form.addEventListener('submit', async (e) => {
@@ -90,9 +91,16 @@ function abrirModal(titulo, html, aoEnviar, { largo = false } = {}) {
   }
   return $('#modalCorpo');
 }
-function fecharModal() { $('#modal').hidden = true; $('#modalCorpo').innerHTML = ''; }
-document.addEventListener('click', (e) => { if (e.target.matches('[data-fechar]') || e.target.id === 'modal') fecharModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#modal').hidden) fecharModal(); });
+function fecharModal() { $('#modal').hidden = true; $('#modalCorpo').innerHTML = ''; modalAlterado = false; }
+// O modal só fecha pelo ✕, pelo botão Cancelar ou pela tecla Esc — clicar fora não fecha,
+// para não perder o que foi digitado. Com dados digitados, o Esc pede confirmação.
+let modalAlterado = false;
+document.addEventListener('input', (e) => { if (e.target.closest('#modalCorpo')) modalAlterado = true; });
+document.addEventListener('click', (e) => { if (e.target.closest('[data-fechar]')) fecharModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || $('#modal').hidden) return;
+  if (!modalAlterado || confirmar('Descartar as informações digitadas?')) fecharModal();
+});
 const rodape = (txt = 'Salvar') => `<div class="rodape-form"><button type="button" class="btn" data-fechar>Cancelar</button><button type="submit" class="btn pri">${txt}</button></div>`;
 const confirmar = (msg) => window.confirm(msg);
 
@@ -141,7 +149,17 @@ const barra = (v, max = 120) => {
   const cls = v >= 100 ? 'ok' : v > 0 ? 'at' : 'er';
   return `<div class="barra-rot"><div class="barra ${cls}"><span style="width:${Math.min(100, (v / max) * 100)}%"></span></div><span class="num">${pct(v)}</span></div>`;
 };
-const stat = (rotulo, valor, cls = '', extra = '') => `<div class="stat ${cls}"><div class="rot">${rotulo}</div><div class="val">${valor}</div>${extra}</div>`;
+/** Card de número. Com `link`, o card inteiro é clicável e abre a lista correspondente. */
+const stat = (rotulo, valor, cls = '', extra = '', link = '') => (link
+  ? `<a class="stat clicavel ${cls}" href="${esc(link)}"><div class="rot">${rotulo}</div><div class="val">${valor}</div>${extra}<span class="ver" aria-hidden="true">Ver →</span></a>`
+  : `<div class="stat ${cls}"><div class="rot">${rotulo}</div><div class="val">${valor}</div>${extra}</div>`);
+/** Opções de responsáveis (indicadores, planos e ações) para filtros. */
+let cacheResponsaveis = null;
+async function responsavelOpcoes(sel) {
+  if (!cacheResponsaveis) cacheResponsaveis = await api('/indicadores/responsaveis');
+  const lista = sel && !cacheResponsaveis.includes(sel) ? [...cacheResponsaveis, sel] : cacheResponsaveis;
+  return opcoes(lista.map((n) => [n, n]), sel, 'Todos');
+}
 const vazio = (txt) => `<div class="vazio">${esc(txt)}</div>`;
 const abas = (itens, ativa) => `<div class="abas" role="tablist">${itens.map(([k, t]) => `<button class="aba ${k === ativa ? 'ativa' : ''}" data-aba="${k}" role="tab" aria-selected="${k === ativa}">${t}</button>`).join('')}</div>`;
 
