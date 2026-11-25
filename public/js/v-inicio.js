@@ -45,29 +45,38 @@ rota('/', async (el) => {
   let html = `<div class="cabecalho"><div><h1>Olá, ${esc(estado.usuario.nome.split(' ')[0])}</h1><div class="muted">Painel de gestão${ehDiretoria() ? '' : ' — dados das suas áreas'}</div></div>
     <div class="acoes">${temModulo('indicadores') && ehGestorOuMais() ? '<a class="btn pri" href="#/lancar">Lançamento rápido</a>' : ''}</div></div>`;
   if (meu?.participa) {
-    html += `<div class="card destaque"><div class="depto-topo"><div><h2 style="margin:0">Meu bônus — ${esc(meu.ciclo.nome)}</h2>
+    html += `<a class="card destaque clicavel" href="#/metas?ciclo=${meu.ciclo.id}&aba=individuais"><div class="depto-topo"><div><h2 style="margin:0">Meu bônus — ${esc(meu.ciclo.nome)}</h2>
       <div class="muted">Nota final ${pct(meu.nota_final)} · ${meu.meses_elegiveis}/${meu.meses_ciclo} meses elegíveis${meu.redutor_pct ? ` · redutor ${pct(meu.redutor_pct)}` : ''}</div>
       ${meu.motivos.length ? `<div class="muted">⚠ ${esc(meu.motivos.join('; '))}</div>` : ''}</div>
-      <div class="nota-grande">${moeda(meu.bonus)}</div></div><p class="dica">Valor ${meu.ciclo.status === 'encerrado' ? 'final' : 'parcial, calculado com os resultados lançados até agora'}.</p></div>`;
+      <div class="nota-grande">${moeda(meu.bonus)}</div></div><p class="dica">Valor ${meu.ciclo.status === 'encerrado' ? 'final' : 'parcial, calculado com os resultados lançados até agora'}. Clique para ver o detalhamento.</p></a>`;
   }
   if (pi) {
     html += `<div class="grid g4" style="margin-bottom:16px">
-      ${stat('Indicadores ativos', pi.total_indicadores)}${stat('Atingidos', pi.status.atingido, 'ok')}${stat('Em atenção', pi.status.atencao, 'at')}${stat('Em desvio', pi.status.desvio, 'er')}
-      ${stat('Planos em aberto', pi.planos.abertos)}${stat('Planos com atraso', pi.planos.com_atraso, pi.planos.com_atraso ? 'er' : '')}</div>
+      ${stat('Indicadores ativos', pi.total_indicadores, '', '', '#/indicadores')}
+      ${stat('Atingidos', pi.status.atingido, 'ok', '', '#/indicadores?status=atingido')}
+      ${stat('Em atenção', pi.status.atencao, 'at', '', '#/indicadores?status=atencao')}
+      ${stat('Em desvio', pi.status.desvio, 'er', '', '#/indicadores?status=desvio')}
+      ${pi.status.sem_medicao ? stat('Sem medição', pi.status.sem_medicao, '', '', '#/indicadores?status=sem_medicao') : ''}
+      ${stat('Planos em aberto', pi.planos.abertos, '', '', '#/planos?status=abertos')}
+      ${stat('Planos com atraso', pi.planos.com_atraso, pi.planos.com_atraso ? 'er' : '', '', '#/planos?atrasados=1')}</div>
     <div class="grid g2">
       <div class="card"><h2>Alertas</h2>${pi.alertas.length ? pi.alertas.slice(0, 12).map((a) => `<div class="alerta">${selo(a.gravidade === 'alta' ? 'desvio' : a.gravidade === 'media' ? 'atencao' : 'pendente', a.gravidade)}
         <a href="${a.plano_id ? '#/planos/' + a.plano_id : '#/indicadores/' + a.indicador_id}">${esc(a.mensagem)}</a></div>`).join('') + (pi.alertas.length > 12 ? `<p class="muted">+${pi.alertas.length - 12} alerta(s)</p>` : '') : vazio('Nenhum alerta 🎉')}</div>
       <div class="card"><h2>Indicadores por departamento</h2><div class="tabela-wrap"><table><thead><tr><th>Departamento</th><th class="num">Total</th><th class="num">Atingido</th><th class="num">Atenção</th><th class="num">Desvio</th><th>Saúde</th></tr></thead><tbody>
-        ${pi.por_departamento.map((d) => `<tr><td><a href="#/indicadores?departamento_id=${d.departamento_id}">${esc(d.departamento)}</a></td><td class="num">${d.total}</td><td class="num">${d.atingido}</td><td class="num">${d.atencao}</td><td class="num">${d.desvio}</td><td style="min-width:140px">${barra(d.total ? (d.atingido / d.total) * 100 : 0, 100)}</td></tr>`).join('') || '<tr><td colspan="6" class="vazio">Sem indicadores</td></tr>'}
+        ${pi.por_departamento.map((d) => {
+    const lk = (n, st) => (n ? `<a href="#/indicadores?departamento_id=${d.departamento_id}${st ? '&status=' + st : ''}">${n}</a>` : n);
+    return `<tr><td><a href="#/indicadores?departamento_id=${d.departamento_id}">${esc(d.departamento)}</a></td><td class="num">${lk(d.total)}</td><td class="num">${lk(d.atingido, 'atingido')}</td><td class="num">${lk(d.atencao, 'atencao')}</td><td class="num">${lk(d.desvio, 'desvio')}</td><td style="min-width:140px">${barra(d.total ? (d.atingido / d.total) * 100 : 0, 100)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="vazio">Sem indicadores</td></tr>'}
       </tbody></table></div></div></div>`;
   }
   if (ap && ap.departamentos.length) {
     const g = ap.gatilho_corporativo;
     html += `<div class="card"><div class="depto-topo"><h2 style="margin:0">Metas bonificáveis — ${esc(ap.ciclo.nome)} ${selo(ap.ciclo.status)}</h2><a class="btn peq" href="#/metas?ciclo=${ap.ciclo.id}">Abrir scorecard</a></div>
       ${g?.definido ? `<p>${selo(g.atingido ? 'atingido' : g.apurado ? 'desvio' : 'pendente', g.atingido ? 'Gatilho corporativo atingido' : g.apurado ? 'Gatilho corporativo NÃO atingido' : 'Gatilho corporativo a apurar')} <span class="muted">${esc(g.descricao || '')} ≥ ${fmt(g.minimo)}</span></p>` : ''}
-      <div class="resumo-meta" style="margin-bottom:12px"><div>Nota média<b>${pct(ap.totais.nota_media)}</b></div>${ehDiretoria() ? `<div>Bônus-alvo<b>${moeda(ap.totais.valor_base)}</b></div><div>Bônus apurado<b>${moeda(ap.totais.bonus)}</b></div>` : ''}</div>
+      <div class="grid g4" style="margin-bottom:12px">${stat('Nota média', pct(ap.totais.nota_media), '', '', `#/metas?ciclo=${ap.ciclo.id}`)}
+        ${ehDiretoria() ? stat('Bônus-alvo', moeda(ap.totais.valor_base), '', '', `#/metas?ciclo=${ap.ciclo.id}`) + stat('Bônus apurado', moeda(ap.totais.bonus), 'ok', '', `#/metas?ciclo=${ap.ciclo.id}&aba=individuais`) : ''}</div>
       <div class="tabela-wrap"><table><thead><tr><th>Departamento</th><th>Nota</th>${ehDiretoria() ? '<th class="num">Bônus</th>' : ''}<th>Apuração</th></tr></thead><tbody>
-      ${ap.departamentos.map((d) => `<tr><td>${esc(d.departamento)}</td><td style="min-width:180px">${barra(d.nota)}</td>${ehDiretoria() ? `<td class="num">${moeda(d.bonus)}</td>` : ''}<td>${selo(d.status_apuracao)}</td></tr>`).join('')}
+      ${ap.departamentos.map((d) => `<tr><td><a href="#/metas?ciclo=${ap.ciclo.id}">${esc(d.departamento)}</a></td><td style="min-width:180px">${barra(d.nota)}</td>${ehDiretoria() ? `<td class="num">${moeda(d.bonus)}</td>` : ''}<td>${selo(d.status_apuracao)}</td></tr>`).join('')}
       </tbody></table></div></div>`;
   }
   if (!pi && !ap) html += '<div class="card vazio">Nenhum dado disponível.</div>';
@@ -79,16 +88,50 @@ rota('/lancar', async (el, _, q) => {
   const periodo = q.periodo || (() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
   const lista = (await api('/indicadores')).filter((i) => i.tipo !== 'calculado' && podeEditarDepto(i.departamento_id));
   const meds = await Promise.all(lista.map((i) => api(`/indicadores/${i.id}/medicoes`)));
+  const deptos = [...new Map(lista.map((i) => [i.departamento_id, i.departamento])).entries()].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'));
+  const resps = [...new Set(lista.map((i) => i.responsavel).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const normal = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   el.innerHTML = `<div class="cabecalho"><div><h1>Lançamento rápido</h1><div class="muted">Registre os valores do período de uma só vez</div></div>
     <label class="inline">Período <input type="month" id="per" value="${periodo}"></label></div>
+    <div class="card"><form class="filtros" id="fFiltro">
+      <label style="flex:1;min-width:200px">Buscar<input type="search" name="busca" value="${esc(q.busca)}" placeholder="Código ou nome do indicador"></label>
+      <label>Departamento<select name="departamento_id">${opcoes(deptos, q.departamento_id, 'Todos')}</select></label>
+      <label>Responsável<select name="responsavel">${opcoes(resps.map((r) => [r, r]), q.responsavel, 'Todos')}</select></label>
+      <label>Situação no período<select name="situacao">${opcoes([['pendente', 'Sem valor lançado'], ['lancado', 'Já lançados'], ['desvio', 'Em desvio']], q.situacao, 'Todos')}</select></label>
+      <button type="button" class="btn peq" id="limpar">Limpar filtros</button></form>
+      <p class="muted" id="contagem" style="margin:0"></p></div>
     <form id="fLanc" class="card lancamentos">${lista.map((i, k) => {
     const atual = meds[k].find((m) => m.periodo === periodo);
-    return `<div class="lanc-item"><div><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b><div class="muted" style="font-size:12px">${esc(i.departamento)} · ${esc(faixaTexto(i))}</div></div>
+    const situacao = !atual ? 'pendente' : atual.status === 'desvio' ? 'desvio lancado' : 'lancado';
+    return `<div class="lanc-item" data-depto="${i.departamento_id}" data-resp="${esc(i.responsavel || '')}" data-sit="${situacao}" data-texto="${esc(normal(`${i.codigo || ''} ${i.nome}`))}">
+      <div><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b><div class="muted" style="font-size:12px">${esc(i.departamento)}${i.responsavel ? ' · ' + esc(i.responsavel) : ''} · ${esc(faixaTexto(i))}</div></div>
       <div class="lanc-campo"><input type="number" step="any" inputmode="decimal" name="${i.id}" value="${atual ? atual.valor : ''}" aria-label="Valor de ${esc(i.nome)}" placeholder="${esc(i.unidade || 'valor')}">
-      ${atual ? selo(atual.status) : ''}</div></div>`;
+      ${atual ? selo(atual.status) : selo('pendente', 'Pendente')}</div></div>`;
   }).join('') || vazio('Nenhum indicador disponível para lançamento')}
+    <div class="vazio" id="semResultado" hidden>Nenhum indicador corresponde aos filtros.</div>
     ${lista.length ? '<div class="rodape-form"><button class="btn pri">Salvar lançamentos</button></div>' : ''}</form>`;
-  $('#per', el).onchange = (e) => irPara('#/lancar?periodo=' + e.target.value);
+  // Filtra na própria tela (sem recarregar), preservando os valores já digitados
+  const fFiltro = $('#fFiltro', el);
+  const filtrar = () => {
+    const f = dadosForm(fFiltro);
+    const busca = normal(f.busca);
+    let visiveis = 0;
+    for (const item of $$('.lanc-item', el)) {
+      const ok = (!busca || item.dataset.texto.includes(busca)) && (!f.departamento_id || item.dataset.depto === f.departamento_id)
+        && (!f.responsavel || item.dataset.resp === f.responsavel) && (!f.situacao || item.dataset.sit.split(' ').includes(f.situacao));
+      item.hidden = !ok;
+      if (ok) visiveis++;
+    }
+    $('#contagem', el).textContent = `Mostrando ${visiveis} de ${lista.length} indicador(es)`;
+    $('#semResultado', el).hidden = visiveis > 0 || !lista.length;
+    history.replaceState(null, '', '#/lancar?' + qs({ periodo, ...f }));
+  };
+  fFiltro.addEventListener('submit', (e) => e.preventDefault());
+  fFiltro.addEventListener('input', filtrar);
+  fFiltro.addEventListener('change', filtrar);
+  $('#limpar', el).onclick = () => { for (const c of $$('[name]', fFiltro)) c.value = ''; filtrar(); };
+  filtrar();
+  $('#per', el).onchange = (e) => irPara('#/lancar?' + qs({ ...dadosForm(fFiltro), periodo: e.target.value }));
   $('#fLanc', el).addEventListener('submit', tentar(async (e) => {
     e.preventDefault();
     const d = dadosForm(e.target);

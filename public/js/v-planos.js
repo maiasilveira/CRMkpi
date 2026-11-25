@@ -8,9 +8,11 @@ rota('/planos', async (el, _, q) => {
   el.innerHTML = `<div class="cabecalho"><h1>Planos de ação</h1></div>
   <div class="card"><form class="filtros" id="filtros">
     <label>Departamento<select name="departamento_id">${deptoOpcoes(q.departamento_id, 'Todos')}</select></label>
-    <label>Status<select name="status">${opcoes(['aberto', 'em_andamento', 'concluido', 'cancelado'].map((s) => [s, rot(s)]), q.status, 'Todos')}</select></label>
+    <label>Responsável<select name="responsavel">${await responsavelOpcoes(q.responsavel)}</select></label>
+    <label>Status<select name="status">${opcoes([['abertos', 'Em aberto (não encerrados)'], ...['aberto', 'em_andamento', 'concluido', 'cancelado'].map((s) => [s, rot(s)])], q.status, 'Todos')}</select></label>
     <label>Prazo<select name="atrasados">${opcoes([['1', 'Somente com atraso']], q.atrasados, 'Todos')}</select></label>
-    <label>Ordenar por<select name="ordem">${opcoes([['gut', 'Prioridade GUT'], ['recentes', 'Mais recentes']], q.ordem || 'gut')}</select></label></form>
+    <label>Ordenar por<select name="ordem">${opcoes([['gut', 'Prioridade GUT'], ['recentes', 'Mais recentes']], q.ordem || 'gut')}</select></label>
+    ${['departamento_id', 'status', 'atrasados', 'responsavel'].some((k) => q[k]) ? '<a class="btn peq" href="#/planos">Limpar filtros</a>' : ''}</form>
   <div class="tabela-wrap"><table><thead><tr><th class="num">GUT</th><th>Plano</th><th>Indicador</th><th>PDCA</th><th>Progresso</th><th>Prazo final</th><th class="num">Custo</th><th>Status</th><th>Eficácia</th></tr></thead><tbody>
   ${planos.map((p) => `<tr><td class="num">${p.prioridade ? `<span class="gut ${p.prioridade >= 64 ? 'alta' : p.prioridade >= 27 ? 'media' : ''}">${p.prioridade}</span>` : '—'}</td>
     <td><a href="#/planos/${p.id}"><b>${esc(p.titulo)}</b></a>${p.acoes_atrasadas ? ' ' + selo('atrasada', p.acoes_atrasadas + ' atrasada(s)') : ''}<div class="muted" style="font-size:12px">${esc(p.responsavel || '')}</div></td>
