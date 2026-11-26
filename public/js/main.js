@@ -12,7 +12,7 @@ function montarNav() {
     ['#/departamentos', 'Estrutura organizacional', true],
     ['#/colaboradores', 'Colaboradores', temModulo('metas') && ehGestorOuMais()],
     ['#/metas/alteracoes', 'Alterações de metas', temModulo('metas') && ehGestorOuMais()],
-    ['#/importar', 'Importar medições', temModulo('indicadores') && ehGestorOuMais()],
+    ['#/importar', 'Importar planilhas', temModulo('indicadores') && ehGestorOuMais()],
     ['#/admin/integracoes', 'Integrações', temModulo('indicadores') && ehDiretoria()],
     ['#/admin/usuarios', 'Usuários', ehAdmin()], ['#/admin/tokens', 'Tokens de API', ehAdmin()], ['#/admin/config', 'Configurações', ehAdmin()],
     ['#/auditoria', 'Auditoria', ehDiretoria()],

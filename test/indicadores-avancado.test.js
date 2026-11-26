@@ -223,6 +223,89 @@ test('modelo de importação com código e nome dos indicadores; linhas sem valo
   assert.equal((await req('GET', '/indicadores/importar/modelo?periodo=abc')).status, 400);
 });
 
+test('importação em lote das fichas de indicadores (criar, atualizar, validar)', async (t) => {
+  const { req, entrarComo, dep } = await base(t);
+  const jur = (await req('POST', '/departamentos', { nome: 'Jurídico e Compliance', sigla: 'JUR' })).body;
+  const imp = (csv, sim) => req('POST', `/indicadores/fichas/importar?nome=f.csv${sim ? '&simular=1' : ''}`, Buffer.from(csv), { headers: { 'Content-Type': 'application/octet-stream' } });
+  const lista = async () => (await req('GET', '/indicadores?todos=1')).body;
+
+  // Cabeçalho em português com acentos; polaridade em texto livre; departamento por nome ou sigla; perspectiva pelo nome
+  const csv = [
+    'Código;Nome;Departamento;Polaridade;Meta;Limite inferior;Limite superior;Frequência;Perspectiva;Unidade',
+    'JUR-001;Denúncias respondidas no prazo;JUR;Maior é melhor;100%;95;;mensal;Processos internos;%',
+    'JUR-002;Estoque de processos;jurídico e compliance;reduzir;5;;7;Mensal;;Unidade',
+    'COM-001;Temperatura;Comercial;entre;4;2;6;;;°C',
+    'X-1;Polaridade ruim;JUR;às vezes;1;;;;;',
+    'X-2;Sem meta;JUR;maior;;;;;;',
+    'X-3;Depto inexistente;Marketing;maior;1;;;;;',
+    'JUR-001;Código repetido;JUR;maior;1;;;;;',
+    'X-4;Faixa incoerente;JUR;maior é melhor;10;20;;;;',
+  ].join('\n');
+  const sim = (await imp(csv, true)).body;
+  assert.equal(sim.simulacao, true);
+  assert.deepEqual([sim.criados, sim.atualizados, sim.erros], [3, 0, 5]);
+  const erro = (cod) => sim.linhas.find((l) => !l.ok && l.codigo === cod)?.erro || '';
+  assert.match(erro('X-1'), /Polaridade não reconhecida/);
+  assert.match(erro('X-2'), /"meta" é obrigatório/);
+  assert.match(erro('X-3'), /Departamento "Marketing" não encontrado/);
+  assert.match(sim.linhas.find((l) => l.linha === 8).erro, /repetido na planilha/);
+  assert.match(erro('X-4'), /limite inferior/);
+  assert.equal((await lista()).length, 0, 'simulação não grava nada');
+
+  const real = (await imp(csv)).body;
+  assert.deepEqual([real.criados, real.erros], [3, 5]);
+  const inds = await lista();
+  const j1 = inds.find((i) => i.codigo === 'JUR-001');
+  assert.deepEqual([j1.departamento_id, j1.polaridade, j1.meta, j1.limite_inferior, j1.perspectiva, j1.unidade], [jur.id, 'maior_melhor', 100, 95, 'processos', '%']);
+  assert.deepEqual(['menor_melhor', 7], [inds.find((i) => i.codigo === 'JUR-002').polaridade, inds.find((i) => i.codigo === 'JUR-002').limite_superior]);
+  assert.equal(inds.find((i) => i.codigo === 'COM-001').departamento_id, dep.id);
+
+  // Reimportar a mesma planilha: nada muda
+  const de_novo = (await imp(csv)).body;
+  assert.deepEqual([de_novo.criados, de_novo.atualizados, de_novo.sem_alteracao], [0, 0, 3]);
+
+  // Planilha só de atualização (codigo + colunas a mudar); meta com histórico exige justificativa
+  await req('POST', `/indicadores/${j1.id}/medicoes`, { periodo: '2026-01', valor: 97 });
+  let up = (await imp('codigo;descricao;meta\nJUR-001;Prazo legal de 30 dias;98\n')).body;
+  assert.equal(up.erros, 1);
+  assert.match(up.linhas[0].erro, /justificativa/);
+  up = (await imp('codigo;descricao;meta;justificativa\nJUR-001;Prazo legal de 30 dias;98;Nova política\n')).body;
+  assert.equal(up.atualizados, 1);
+  assert.deepEqual(up.linhas[0].campos, ['descricao', 'meta']);
+  const j1b = (await req('GET', `/indicadores/${j1.id}`)).body;
+  assert.deepEqual([j1b.meta, j1b.descricao, j1b.limite_inferior, j1b.nome], [98, 'Prazo legal de 30 dias', 95, 'Denúncias respondidas no prazo'], 'células ausentes mantêm valores');
+  assert.equal((await req('GET', `/indicadores/${j1.id}/versoes`)).body[0].justificativa, 'Nova política');
+  assert.equal((await imp('nome;meta\nX;1\n')).status, 400, 'sem codigo e sem colunas obrigatórias');
+
+  // Modelo XLSX: indicadores atuais, listas de valores e reimportação de uma linha nova
+  const rx = await req('GET', '/indicadores/fichas/modelo', undefined, { binario: true });
+  assert.equal(rx.status, 200);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(rx.body);
+  const ws = wb.getWorksheet('Indicadores');
+  assert.ok(wb.getWorksheet('Listas') && wb.getWorksheet('Instruções'));
+  const codigos = []; ws.eachRow((row, n) => { if (n > 1) codigos.push(row.getCell(1).value); });
+  assert.deepEqual(codigos.sort(), ['COM-001', 'JUR-001', 'JUR-002']);
+  assert.equal(ws.getCell('F2').dataValidation.type, 'list');
+  const nova = ws.addRow(['JUR-003', 'Contratos no SLA', 'Jurídico e Compliance', 'Ana', '%', 'Maior é melhor', 100, 90]);
+  assert.ok(nova);
+  const rImp = (await req('POST', '/indicadores/fichas/importar?nome=m.xlsx', Buffer.from(await wb.xlsx.writeBuffer()), { headers: { 'Content-Type': 'application/octet-stream' } })).body;
+  assert.deepEqual([rImp.criados, rImp.atualizados, rImp.sem_alteracao, rImp.erros], [1, 0, 3, 0]);
+  const vazio = await req('GET', '/indicadores/fichas/modelo?vazio=1', undefined, { binario: true });
+  const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.load(vazio.body);
+  assert.equal(wb2.getWorksheet('Indicadores').actualRowCount, 1, 'modelo vazio só com cabeçalho');
+
+  // Permissões: gestor só cria na própria área; colaborador não importa
+  await req('POST', '/usuarios', { nome: 'G', email: 'g@x.com', senha: 'senha-gest-1', perfil: 'gestor', departamento_id: dep.id });
+  await req('POST', '/usuarios', { nome: 'C', email: 'c@x.com', senha: 'senha-colab-1', perfil: 'colaborador', departamento_id: dep.id });
+  const g = await entrarComo('g@x.com', 'senha-gest-1');
+  const rg = (await g('POST', '/indicadores/fichas/importar?nome=f.csv', Buffer.from('codigo;nome;departamento;polaridade;meta\nCOM-9;A;Comercial;maior;1\nJUR-9;B;JUR;maior;1\n'), { headers: { 'Content-Type': 'application/octet-stream' } })).body;
+  assert.deepEqual([rg.criados, rg.erros], [1, 1]);
+  assert.match(rg.linhas[1].erro, /permissão/i);
+  const c = await entrarComo('c@x.com', 'senha-colab-1');
+  assert.equal((await c('POST', '/indicadores/fichas/importar?nome=f.csv', Buffer.from(csv), { headers: { 'Content-Type': 'application/octet-stream' } })).status, 403);
+});
+
 test('integração HTTP/JSON coleta o valor do indicador', async (t) => {
   const api = http.createServer((rq, rs) => {
     if (rq.headers['x-api-key'] !== 'segredo') { rs.statusCode = 401; return rs.end(); }

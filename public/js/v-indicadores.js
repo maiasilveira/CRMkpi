@@ -320,7 +320,16 @@ rota('/indicadores/:id', async (el, { id }, q) => {
 
 // ---------- Importação ----------
 rota('/importar', async (el) => {
-  el.innerHTML = `<div class="cabecalho"><h1>Importar medições</h1></div><div class="card">
+  el.innerHTML = `<div class="cabecalho"><h1>Importar planilhas</h1></div>
+  <div class="card"><h2>1. Cadastro de indicadores (fichas)</h2>
+    <p>Crie ou atualize vários indicadores de uma vez. Uma linha por indicador; obrigatórias para criar: <code>nome</code>, <code>departamento</code>, <code>polaridade</code> e <code>meta</code>.
+    Se o <code>codigo</code> já existir, o indicador é <b>atualizado</b> (células vazias mantêm o valor atual).</p>
+    <p class="dica">O modelo Excel traz listas de valores (departamentos, polaridades, frequências, perspectivas e objetivos) e uma aba de instruções.
+      Baixe-o com os indicadores atuais para revisar e atualizar, ou vazio para cadastrar novos.</p>
+    <div class="filtros"><a class="btn peq" href="/api/indicadores/fichas/modelo">Baixar modelo com os indicadores atuais</a><a class="btn peq" href="/api/indicadores/fichas/modelo?vazio=1">Baixar modelo vazio</a></div>
+    <form id="fFichas" class="filtros" style="margin-top:12px"><label style="flex:1">Arquivo<input type="file" name="arquivo" accept=".csv,.xlsx" required></label>
+    <button type="button" class="btn" id="simularFichas">Validar (simulação)</button><button class="btn pri">Importar indicadores</button></form><div id="resultadoFichas"></div></div>
+  <div class="card"><h2>2. Medições (resultados)</h2>
     <p>Envie uma planilha <b>.xlsx</b> ou <b>.csv</b> (separador ; ou ,) com as colunas <code>codigo</code>, <code>periodo</code>, <code>valor</code> e, opcionalmente, <code>comentario</code>.
     Períodos aceitos: <code>2026-03</code>, <code>03/2026</code> ou uma data. Valores podem usar vírgula decimal.</p>
     <p class="dica">O modelo já vem com os indicadores que você pode lançar (código, nome, departamento, unidade e meta, para identificação) e o período escolhido.
@@ -338,7 +347,7 @@ rota('/importar', async (el) => {
   };
   linksModelo(); $('#perModelo', el).addEventListener('change', linksModelo);
   const enviar = tentar(async (simular) => {
-    const f = $('[name=arquivo]', el).files[0]; if (!f) { toast('Escolha um arquivo', true); return; }
+    const f = $('[name=arquivo]', $('#fImp', el)).files[0]; if (!f) { toast('Escolha um arquivo', true); return; }
     const r = await enviarArquivo('/indicadores/importar', f, simular ? { simular: 1 } : {});
     $('#resultado', el).innerHTML = `<div class="aviso ${r.erros ? 'erro' : ''}">${r.simulacao ? 'Simulação: ' : ''}${r.importadas} de ${r.total} linha(s) ${r.simulacao ? 'válidas' : 'importadas'}${r.erros ? `, ${r.erros} com erro` : ''}${r.ignoradas ? ` · ${r.ignoradas} ignorada(s) por estar sem valor` : ''}.</div>
       <div class="tabela-wrap"><table><thead><tr><th>Linha</th><th>Resultado</th><th>Indicador</th><th>Período</th><th class="num">Valor</th></tr></thead><tbody>
@@ -347,6 +356,20 @@ rota('/importar', async (el) => {
   });
   $('#simular', el).onclick = () => enviar(true);
   $('#fImp', el).addEventListener('submit', (e) => { e.preventDefault(); enviar(false); });
+
+  const ACAO_FICHA = { criar: ['atingido', 'Criar'], atualizar: ['atencao', 'Atualizar'], sem_alteracao: ['sem_medicao', 'Sem alteração'] };
+  const enviarFichas = tentar(async (simular) => {
+    const f = $('[name=arquivo]', $('#fFichas', el)).files[0]; if (!f) { toast('Escolha um arquivo', true); return; }
+    const r = await enviarArquivo('/indicadores/fichas/importar', f, simular ? { simular: 1 } : {});
+    const verbo = r.simulacao ? ['seriam criados', 'seriam atualizados'] : ['criados', 'atualizados'];
+    $('#resultadoFichas', el).innerHTML = `<div class="aviso ${r.erros ? 'erro' : ''}">${r.simulacao ? 'Simulação (nada foi gravado): ' : ''}${r.criados} indicador(es) ${verbo[0]}, ${r.atualizados} ${verbo[1]}, ${r.sem_alteracao} sem alteração${r.erros ? `, <b>${r.erros} com erro</b> (essas linhas ${r.simulacao ? 'não seriam importadas' : 'não foram importadas'})` : ''}.</div>
+      <div class="tabela-wrap"><table><thead><tr><th>Linha</th><th>Resultado</th><th>Código</th><th>Indicador</th><th>Detalhe</th></tr></thead><tbody>
+      ${r.linhas.map((l) => `<tr><td>${l.linha}</td><td>${l.ok ? selo(...ACAO_FICHA[l.acao]) : selo('desvio', 'Erro')}</td><td>${esc(l.codigo || '—')}</td><td>${esc(l.nome || '')}</td>
+        <td class="muted" style="font-size:12px">${l.ok ? esc((l.campos || []).join(', ')) : esc(l.erro)}</td></tr>`).join('') || '<tr><td colspan="5" class="vazio">Nenhuma linha</td></tr>'}</tbody></table></div>`;
+    if (!simular) { toast('Importação de indicadores concluída'); cacheObjetivos = null; cacheResponsaveis = null; }
+  });
+  $('#simularFichas', el).onclick = () => enviarFichas(true);
+  $('#fFichas', el).addEventListener('submit', (e) => { e.preventDefault(); enviarFichas(false); });
 });
 
 // ---------- Mapa estratégico ----------

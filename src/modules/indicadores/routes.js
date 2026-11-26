@@ -3,7 +3,7 @@ const express = require('express');
 
 const assinc = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
-function rotasIndicadores(s, { entrada, ia }) {
+function rotasIndicadores(s, { entrada, ia, fichas }) {
   const r = express.Router();
   const id = (req, k = 'id') => Number(req.params[k]);
 
@@ -16,6 +16,13 @@ function rotasIndicadores(s, { entrada, ia }) {
   r.put('/objetivos/:oid', (req, res) => res.json(s.salvarObjetivo(req.body, id(req, 'oid'))));
   r.delete('/objetivos/:oid', (req, res) => { s.excluirObjetivo(id(req, 'oid')); res.status(204).end(); });
 
+  // Cadastro em lote (fichas de indicadores)
+  r.get('/fichas/modelo', assinc(async (req, res) => {
+    const m = await fichas.modelo({ incluirAtuais: req.query.vazio !== '1' });
+    res.type(m.tipo).attachment(m.nome).send(m.conteudo);
+  }));
+  r.post('/fichas/importar', express.raw({ type: () => true, limit: '12mb' }), assinc(async (req, res) =>
+    res.json(await fichas.importar(req.query.nome, req.body, { simular: req.query.simular === '1' }))));
   r.get('/importar/modelo', assinc(async (req, res) => {
     const m = await entrada.modeloImportacao({ formato: req.query.formato === 'csv' ? 'csv' : 'xlsx', periodo: req.query.periodo });
     res.type(m.tipo).attachment(m.nome).send(m.conteudo);
