@@ -87,8 +87,12 @@ function criarNotificacoesService(core, { transporteEmail } = {}) {
     const ancestrais = db.prepare(`WITH RECURSIVE sobe(id, pai) AS (SELECT id, pai_id FROM departamentos WHERE id=?
         UNION ALL SELECT d.id, d.pai_id FROM departamentos d JOIN sobe ON d.id = sobe.pai) SELECT id FROM sobe`).all(deptoId).map((r) => r.id);
     if (!ancestrais.length) return [];
-    return db.prepare(`SELECT id FROM usuarios WHERE ativo=1 AND perfil='gestor' AND departamento_id IN (${ancestrais.map(() => '?').join(',')})`)
-      .all(...ancestrais).map((r) => r.id);
+    const marcas = ancestrais.map(() => '?').join(',');
+    // Gestores cadastrados nas áreas + gestores vinculados aos nós (ex.: diretor ou gerente indicado na estrutura)
+    return [...new Set([
+      ...db.prepare(`SELECT id FROM usuarios WHERE ativo=1 AND perfil='gestor' AND departamento_id IN (${marcas})`).all(...ancestrais).map((r) => r.id),
+      ...db.prepare(`SELECT u.id FROM departamentos d JOIN usuarios u ON u.id = d.gestor_usuario_id WHERE u.ativo=1 AND d.id IN (${marcas})`).all(...ancestrais).map((r) => r.id),
+    ])];
   }
   const porPerfil = (...perfis) => db.prepare(`SELECT id FROM usuarios WHERE ativo=1 AND perfil IN (${perfis.map(() => '?').join(',')})`).all(...perfis).map((r) => r.id);
   const porNome = (texto) => (texto ? db.prepare('SELECT id, nome FROM usuarios WHERE ativo=1').all()

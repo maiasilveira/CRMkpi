@@ -2,20 +2,34 @@
 /* Administração: departamentos (hierarquia), usuários, tokens de API, configurações e auditoria. */
 
 rota('/departamentos', async (el) => {
-  const lista = await api('/departamentos?todos=1');
+  const [lista, usuarios] = await Promise.all([api('/departamentos?todos=1'), ehAdmin() ? api('/usuarios') : []]);
   const filhos = (pai) => lista.filter((d) => (d.pai_id || null) === pai);
-  const linha = (d, nivel) => `<tr><td style="padding-left:${10 + nivel * 22}px">${nivel ? '└ ' : ''}<b>${esc(d.nome)}</b></td><td>${rot(d.tipo)}</td><td>${esc(d.sigla || '—')}</td><td>${esc(d.gestor || '—')}</td>
+  const gestorCel = (d) => {
+    if (d.gestor_usuario_id) {
+      return `${esc(d.gestor_nome || d.gestor)} <span title="Gestor vinculado a um usuário do sistema">${selo('atingido', 'usuário')}</span>${d.gestor_sem_acesso
+        ? ` <span title="O usuário está cadastrado em outra área (ou inativo) e não enxerga esta. Ajuste o departamento dele em Usuários.">${selo('atencao', '⚠ sem acesso à área')}</span>` : ''}`;
+    }
+    return d.gestor ? `${esc(d.gestor)} <span class="muted" style="font-size:12px" title="Nome sem usuário vinculado: não recebe alertas nem tem acesso">(sem usuário)</span>` : '—';
+  };
+  const linha = (d, nivel) => `<tr><td style="padding-left:${10 + nivel * 22}px">${nivel ? '└ ' : ''}<b>${esc(d.nome)}</b></td><td>${selo(d.tipo === 'diretoria' || d.tipo === 'empresa' ? 'ativo' : '', rot(d.tipo))}</td><td>${esc(d.sigla || '—')}</td><td>${gestorCel(d)}</td>
     <td>${d.ativo ? selo('atingido', 'Ativo') : selo('cancelado', 'Inativo')}</td><td>${ehAdmin() ? `<button class="btn peq" data-edit="${d.id}">Editar</button>` : ''}</td></tr>${filhos(d.id).map((f) => linha(f, nivel + 1)).join('')}`;
   const raizes = lista.filter((d) => !d.pai_id || !lista.some((x) => x.id === d.pai_id));
-  el.innerHTML = `<div class="cabecalho"><div><h1>Estrutura organizacional</h1><div class="muted">Empresa → diretorias → departamentos. Gestores enxergam sua área e as áreas abaixo dela.</div></div>
-    ${ehAdmin() ? '<button class="btn pri" id="novo">+ Departamento</button>' : ''}</div>
-  <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Sigla</th><th>Gestor</th><th>Situação</th><th></th></tr></thead><tbody>
-  ${raizes.map((d) => linha(d, 0)).join('') || '<tr><td colspan="6" class="vazio">Nenhum departamento</td></tr>'}</tbody></table></div></div>`;
-  const form = (d = {}) => abrirModal(d.id ? 'Editar departamento' : 'Novo departamento', `<form><div class="campos">
+  const semUsuario = lista.filter((d) => d.ativo && !d.gestor_usuario_id).length;
+  const semAcesso = lista.filter((d) => d.gestor_sem_acesso).length;
+  el.innerHTML = `<div class="cabecalho"><div><h1>Estrutura organizacional</h1><div class="muted">CEO/empresa → diretorias → gerências → coordenações. Cada gestor enxerga e edita a área a que está vinculado e tudo o que está abaixo dela.</div></div>
+    ${ehAdmin() ? '<button class="btn pri" id="novo">+ Área</button>' : ''}</div>
+  ${ehAdmin() && (semUsuario || semAcesso) ? `<div class="aviso ${semAcesso ? 'erro' : ''}" style="margin-top:0">${semUsuario ? `${semUsuario} área(s) sem gestor vinculado a usuário (não recebem alertas por gestor).` : ''}${semAcesso ? ` ${semAcesso} gestor(es) vinculado(s) sem acesso à área que chefiam.` : ''}</div>` : ''}
+  <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>Nível</th><th>Sigla</th><th>Gestor</th><th>Situação</th><th></th></tr></thead><tbody>
+  ${raizes.map((d) => linha(d, 0)).join('') || '<tr><td colspan="6" class="vazio">Nenhuma área</td></tr>'}</tbody></table></div></div>`;
+  const form = (d = {}) => abrirModal(d.id ? 'Editar área' : 'Nova área', `<form><div class="campos">
     <label class="largo">Nome *<input name="nome" required value="${esc(d.nome)}"></label><label>Sigla<input name="sigla" value="${esc(d.sigla)}"></label>
-    <label>Tipo<select name="tipo">${opcoes(['empresa', 'diretoria', 'departamento'].map((t) => [t, rot(t)]), d.tipo || 'departamento')}</select></label>
-    <label>Subordinado a<select name="pai_id">${opcoes(lista.filter((x) => x.id !== d.id).map((x) => [x.id, x.nome]), d.pai_id, '— (topo)')}</select></label>
-    <label>Gestor<input name="gestor" value="${esc(d.gestor)}"></label><label class="check"><input type="checkbox" name="ativo" ${d.ativo === 0 ? '' : 'checked'}> Ativo</label></div>${rodape()}</form>`,
+    <label>Nível<select name="tipo">${opcoes(['empresa', 'diretoria', 'gerencia', 'coordenacao', 'departamento'].map((t) => [t, rot(t)]), d.tipo || 'coordenacao')}</select></label>
+    <label>Subordinado a<select name="pai_id">${opcoes(lista.filter((x) => x.id !== d.id).map((x) => [x.id, `${x.nome} (${rot(x.tipo)})`]), d.pai_id, '— (topo)')}</select></label>
+    <label>Gestor (usuário)<select name="gestor_usuario_id">${opcoes(usuarios.filter((u) => u.ativo || u.id === d.gestor_usuario_id).map((u) => [u.id, `${u.nome} — ${rot(u.perfil)}`]), d.gestor_usuario_id, '— sem usuário —')}</select></label>
+    <label>Gestor (nome, se ainda não tiver usuário)<input name="gestor" value="${esc(d.gestor_usuario_id ? '' : d.gestor)}"></label>
+    <label class="check"><input type="checkbox" name="ativo" ${d.ativo === 0 ? '' : 'checked'}> Ativa</label></div>
+    <p class="dica">Vincular o gestor a um usuário faz com que ele receba os alertas desta área e das que estão abaixo. Para <b>ver e editar</b> a área, o usuário precisa estar
+      cadastrado nela (ou numa área acima) em Usuários — ex.: o gerente fica na gerência, e assim enxerga todas as coordenações abaixo.</p>${rodape()}</form>`,
   async (x) => { await api('/departamentos' + (d.id ? '/' + d.id : ''), { metodo: d.id ? 'PUT' : 'POST', corpo: x }); estado.departamentos = await api('/departamentos'); });
   if ($('#novo', el)) $('#novo', el).onclick = () => form();
   el.addEventListener('click', (e) => { const id = e.target.dataset?.edit; if (id) form(lista.find((d) => d.id === +id)); });

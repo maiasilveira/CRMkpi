@@ -73,6 +73,48 @@ test('perfis e escopo por departamento (com hierarquia)', async (t) => {
   assert.equal((await colab('GET', '/eu')).status, 401);
 });
 
+test('estrutura com gerência e coordenação; gestor vinculado a usuário', async (t) => {
+  const { fechar, req, entrarComo, ctx } = await servidor();
+  t.after(fechar);
+  const dir = (await req('POST', '/departamentos', { nome: 'Diretoria Corporativa', tipo: 'diretoria' })).body;
+  const ger = (await req('POST', '/departamentos', { nome: 'Gerência de Pessoas', tipo: 'gerencia', pai_id: dir.id })).body;
+  const rh = (await req('POST', '/departamentos', { nome: 'Recursos Humanos', tipo: 'coordenacao', pai_id: ger.id })).body;
+  const com = (await req('POST', '/departamentos', { nome: 'Comunicação', tipo: 'coordenacao', pai_id: ger.id })).body;
+  const jur = (await req('POST', '/departamentos', { nome: 'Jurídico', tipo: 'gerencia', pai_id: dir.id })).body;
+  assert.equal(ger.tipo, 'gerencia');
+  assert.equal((await req('POST', '/departamentos', { nome: 'X', tipo: 'setor' })).status, 400);
+
+  // Gerente que acumula várias áreas: fica na gerência e enxerga/edita todas as coordenações abaixo
+  const u = (await req('POST', '/usuarios', { nome: 'Denilson', email: 'den@x.com', senha: 'senha-den-1', perfil: 'gestor', departamento_id: ger.id })).body;
+  await req('POST', '/indicadores', { codigo: 'RH-1', nome: 'Turnover', departamento_id: rh.id, polaridade: 'menor_melhor', meta: 2 });
+  const iCom = (await req('POST', '/indicadores', { codigo: 'COM-1', nome: 'Ouvidoria no prazo', departamento_id: com.id, polaridade: 'maior_melhor', meta: 100 })).body;
+  await req('POST', '/indicadores', { codigo: 'JUR-1', nome: 'Processos', departamento_id: jur.id, polaridade: 'menor_melhor', meta: 5 });
+  const den = await entrarComo('den@x.com', 'senha-den-1');
+  assert.deepEqual((await den('GET', '/indicadores')).body.map((i) => i.codigo).sort(), ['COM-1', 'RH-1']);
+  assert.equal((await den('POST', `/indicadores/${iCom.id}/medicoes`, { periodo: '2026-01', valor: 90 })).status, 201);
+
+  // Vínculo do gestor ao nó: nome vem do usuário; sem acesso é sinalizado; vazio remove o vínculo
+  let r = (await req('PUT', `/departamentos/${ger.id}`, { nome: ger.nome, tipo: 'gerencia', pai_id: dir.id, gestor_usuario_id: u.id })).body;
+  assert.deepEqual([r.gestor_usuario_id, r.gestor], [u.id, 'Denilson']);
+  const lista = async () => (await req('GET', '/departamentos?todos=1')).body;
+  assert.equal((await lista()).find((d) => d.id === ger.id).gestor_sem_acesso, false);
+  await req('PUT', `/departamentos/${jur.id}`, { nome: jur.nome, tipo: 'gerencia', pai_id: dir.id, gestor_usuario_id: u.id });
+  const dJur = (await lista()).find((d) => d.id === jur.id);
+  assert.deepEqual([dJur.gestor_nome, dJur.gestor_sem_acesso], ['Denilson', true], 'Denilson não está no Jurídico nem acima dele');
+  assert.equal((await req('PUT', `/departamentos/${rh.id}`, { nome: rh.nome, tipo: 'coordenacao', pai_id: ger.id, gestor_usuario_id: 9999 })).status, 400);
+  r = (await req('PUT', `/departamentos/${jur.id}`, { nome: jur.nome, tipo: 'gerencia', pai_id: dir.id, gestor_usuario_id: '', gestor: 'Luiz (sem usuário)' })).body;
+  assert.deepEqual([r.gestor_usuario_id, r.gestor], [null, 'Luiz (sem usuário)']);
+  // Salvar sem o campo mantém o vínculo
+  r = (await req('PUT', `/departamentos/${ger.id}`, { nome: 'Gerência de Pessoas e Comunicação', tipo: 'gerencia', pai_id: dir.id })).body;
+  assert.equal(r.gestor_usuario_id, u.id);
+
+  // Alertas: gestor vinculado ao nó recebe, mesmo com perfil diretoria e sem departamento
+  const diretor = (await req('POST', '/usuarios', { nome: 'Diretor', email: 'dir@x.com', senha: 'senha-dir-1', perfil: 'diretoria' })).body;
+  await req('PUT', `/departamentos/${dir.id}`, { nome: dir.nome, tipo: 'diretoria', gestor_usuario_id: diretor.id });
+  const alvo = ctx.notificacoes.gestoresDe(rh.id).sort();
+  assert.deepEqual(alvo, [u.id, diretor.id].sort(), 'gerente (na gerência) e diretor (vinculado à diretoria) recebem alertas do RH');
+});
+
 test('tokens de API para integrações', async (t) => {
   const { fechar, req, base } = await servidor();
   t.after(fechar);

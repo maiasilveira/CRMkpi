@@ -28,7 +28,7 @@ const ROTULOS = {
   manual: 'Manual', calculado: 'Calculado', indicador: 'Indicador', soma: 'Soma', media: 'Média', ultimo: 'Último valor',
   financeira: 'Financeira', clientes: 'Clientes', processos: 'Processos internos', aprendizado: 'Aprendizado e crescimento',
   admin: 'Administrador', diretoria: 'Diretoria', gestor: 'Gestor', colaborador: 'Colaborador',
-  empresa: 'Empresa', departamento: 'Departamento',
+  empresa: 'Empresa', departamento: 'Departamento', gerencia: 'Gerência', coordenacao: 'Coordenação',
   P: 'P · Planejar', D: 'D · Executar', C: 'C · Verificar', A: 'A · Agir',
   contencao: 'Contenção', corretiva: 'Corretiva', preventiva: 'Preventiva', alta: 'Alta', media_c: 'Média', baixa: 'Baixa',
 };

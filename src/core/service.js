@@ -5,7 +5,8 @@ const { usuarioAtual } = require('./contexto');
 const { hashSenha, conferirSenha, tokenAleatorio, sha256 } = require('./senhas');
 
 const PERFIS = ['admin', 'diretoria', 'gestor', 'colaborador'];
-const TIPOS_DEPTO = ['empresa', 'diretoria', 'departamento'];
+// Níveis da estrutura: empresa → diretoria → gerência → coordenação ("departamento" = área genérica, compatível com cadastros antigos)
+const TIPOS_DEPTO = ['empresa', 'diretoria', 'gerencia', 'coordenacao', 'departamento'];
 const SEGREDOS = ['smtp_senha'];
 const SESSAO_HORAS = Number(process.env.SESSAO_HORAS) || 12;
 
@@ -65,8 +66,15 @@ function criarCoreService(db) {
   // ================= Departamentos =================
   function listarDepartamentos({ incluirInativos = false } = {}) {
     const f = filtroEscopo('d.id');
-    return db.prepare(`SELECT d.*, p.nome AS pai FROM departamentos d LEFT JOIN departamentos p ON p.id = d.pai_id
-        WHERE 1=1 ${incluirInativos ? '' : 'AND d.ativo = 1'} ${f.sql} ORDER BY d.nome`).all(...f.args);
+    return db.prepare(`SELECT d.*, p.nome AS pai, g.nome AS gestor_nome, g.email AS gestor_email, g.perfil AS gestor_perfil,
+          g.departamento_id AS gestor_departamento_id, g.ativo AS gestor_ativo
+        FROM departamentos d LEFT JOIN departamentos p ON p.id = d.pai_id LEFT JOIN usuarios g ON g.id = d.gestor_usuario_id
+        WHERE 1=1 ${incluirInativos ? '' : 'AND d.ativo = 1'} ${f.sql} ORDER BY d.nome`).all(...f.args)
+      .map(({ gestor_perfil: perfil, gestor_departamento_id: depUsuario, gestor_ativo: ativoUsuario, ...d }) => ({
+        ...d,
+        // O gestor vinculado só consegue ver/editar a área se estiver nela ou acima dela (ou for admin/diretoria)
+        gestor_sem_acesso: d.gestor_usuario_id ? (!ativoUsuario || !podeVer(d.id, { perfil, departamento_id: depUsuario })) : false,
+      }));
   }
   function obterDepartamento(id) {
     const d = db.prepare('SELECT * FROM departamentos WHERE id = ?').get(id);
@@ -81,6 +89,14 @@ function criarCoreService(db) {
     const tipo = E.umDe(dados.tipo, 'tipo', TIPOS_DEPTO, 'departamento');
     const paiId = E.numero(dados.pai_id, 'pai_id');
     const ativo = dados.ativo === undefined ? 1 : (dados.ativo ? 1 : 0);
+    // Gestor vinculado a usuário: ausente = mantém o atual; vazio = remove o vínculo
+    let gestorUsuarioId = dados.gestor_usuario_id === undefined ? (id ? obterDepartamento(id).gestor_usuario_id : null) : E.numero(dados.gestor_usuario_id, 'gestor_usuario_id');
+    if (gestorUsuarioId) {
+      const u = db.prepare('SELECT id, nome FROM usuarios WHERE id=?').get(gestorUsuarioId);
+      E.exigir(u, 'Usuário gestor não encontrado');
+      gestorUsuarioId = u.id;
+    }
+    const gestorFinal = gestorUsuarioId ? db.prepare('SELECT nome FROM usuarios WHERE id=?').get(gestorUsuarioId).nome : gestor;
     const dup = db.prepare('SELECT id FROM departamentos WHERE nome = ? AND id IS NOT ?').get(nome, id ?? null);
     E.exigir(!dup, 'Já existe um departamento com esse nome');
     if (paiId) {
@@ -89,11 +105,11 @@ function criarCoreService(db) {
     }
     if (id) {
       obterDepartamento(id);
-      db.prepare('UPDATE departamentos SET nome=?, sigla=?, gestor=?, ativo=?, tipo=?, pai_id=? WHERE id=?').run(nome, sigla, gestor, ativo, tipo, paiId, id);
+      db.prepare('UPDATE departamentos SET nome=?, sigla=?, gestor=?, ativo=?, tipo=?, pai_id=?, gestor_usuario_id=? WHERE id=?').run(nome, sigla, gestorFinal, ativo, tipo, paiId, gestorUsuarioId, id);
       auditar('core', 'departamento', id, 'atualizar', dados);
       return obterDepartamento(id);
     }
-    const r = db.prepare('INSERT INTO departamentos (nome, sigla, gestor, ativo, tipo, pai_id) VALUES (?,?,?,?,?,?)').run(nome, sigla, gestor, ativo, tipo, paiId);
+    const r = db.prepare('INSERT INTO departamentos (nome, sigla, gestor, ativo, tipo, pai_id, gestor_usuario_id) VALUES (?,?,?,?,?,?,?)').run(nome, sigla, gestorFinal, ativo, tipo, paiId, gestorUsuarioId);
     auditar('core', 'departamento', Number(r.lastInsertRowid), 'criar', dados);
     return obterDepartamento(Number(r.lastInsertRowid));
   }
