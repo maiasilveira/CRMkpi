@@ -66,35 +66,102 @@ const COLUNAS_INDICADORES = [
 let ordemIndicadores = null;
 try { ordemIndicadores = JSON.parse(sessionStorage.getItem('ordemIndicadores') || 'null'); } catch { ordemIndicadores = null; }
 
+// Preferências de visualização (por navegador): agrupar por área e grupos abertos
+const prefInd = (() => { try { return JSON.parse(localStorage.getItem('prefIndicadores') || '{}'); } catch { return {}; } })();
+const salvarPrefInd = () => { try { localStorage.setItem('prefIndicadores', JSON.stringify(prefInd)); } catch { /* sem armazenamento */ } };
+let gruposAbertos = (() => { try { return new Set(JSON.parse(sessionStorage.getItem('gruposIndicadores') || '[]')); } catch { return new Set(); } })();
+const salvarGrupos = () => { try { sessionStorage.setItem('gruposIndicadores', JSON.stringify([...gruposAbertos])); } catch { /* sem armazenamento */ } };
+const statusDe = (i) => i.ultima_medicao?.status || 'sem_medicao';
+const ROT_STATUS = [['atingido', 'Atingido', 'ok'], ['atencao', 'Atenção', 'at'], ['desvio', 'Desvio', 'er'], ['sem_medicao', 'Sem medição', '']];
+
+function linhaIndicador(i, comDepto) {
+  return `<tr><td><a href="#/indicadores/${i.id}"><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b></a>${i.tipo === 'calculado' ? ' ' + selo('pendente', 'ƒ calculado') : ''}${i.responsavel ? `<div class="muted" style="font-size:12px">${esc(i.responsavel)}</div>` : ''}</td>${comDepto ? `<td>${esc(i.departamento)}</td>` : ''}
+    <td class="muted">${esc(faixaTexto(i))}</td>
+    <td class="num">${i.ultima_medicao ? fmt(i.ultima_medicao.valor) + ' <span class="muted">' + mesBR(i.ultima_medicao.periodo) + '</span>' : '—'}</td>
+    <td>${selo(statusDe(i))}</td><td class="num">${i.desvio_pct === null ? '—' : (i.desvio_pct > 0 ? '+' : '') + fmt(i.desvio_pct, 1) + '%'}</td>
+    <td>${selo(i.tendencia)}</td>
+    <td>${i.analises_pendentes ? selo('desvio', i.analises_pendentes + ' sem análise') : ''} ${i.planos_abertos ? selo('em_andamento', i.planos_abertos + ' plano(s)') : ''}</td></tr>`;
+}
+
 rota('/indicadores', async (el, _, q) => {
-  const lista = await api('/indicadores?' + qs(q));
+  const lista = (await api('/indicadores?' + qs(q)))
+    // ordem padrão (sem coluna escolhida): pelo código, que segue a sequência da área (OPE-001, OPE-002…)
+    .sort((a, b) => COMPARA_TEXTO.compare(a.codigo || '~' + a.nome, b.codigo || '~' + b.nome));
+  // Contagens por status sem o filtro de status (para o resumo continuar útil ao filtrar)
+  const base = q.status ? await api('/indicadores?' + qs({ ...q, status: '' })) : lista;
+  const conta = (s) => base.filter((i) => statusDe(i) === s).length;
+  const urlStatus = (s) => '#/indicadores?' + qs({ ...q, status: q.status === s ? '' : s });
   el.innerHTML = `<div class="cabecalho"><h1>Indicadores de desempenho</h1><div class="acoes">
     ${ehGestorOuMais() ? '<a class="btn" href="#/importar">Importar planilha</a><button class="btn pri" id="novo">+ Novo indicador</button>' : ''}</div></div>
-  <div class="card"><form class="filtros" id="filtros">
+  <div class="resumo-status">
+    <a class="stat clicavel ${q.status ? '' : 'ativo'}" href="${'#/indicadores?' + qs({ ...q, status: '' })}"><div class="rot">Indicadores</div><div class="val">${base.length}</div></a>
+    ${ROT_STATUS.map(([s, t, c]) => `<a class="stat clicavel ${c} ${q.status === s ? 'ativo' : ''}" href="${urlStatus(s)}" title="${q.status === s ? 'Remover filtro' : 'Filtrar: ' + t}"><div class="rot">${t}</div><div class="val">${conta(s)}</div></a>`).join('')}
+  </div>
+  <div class="card"><form class="filtros" id="filtros" onsubmit="return false">
+    <label class="busca">Buscar<input type="search" id="buscaInd" placeholder="Código, nome ou responsável" autocomplete="off"></label>
     <label>Departamento<select name="departamento_id">${deptoOpcoes(q.departamento_id, 'Todos')}</select></label>
     <label>Responsável<select name="responsavel">${await responsavelOpcoes(q.responsavel)}</select></label>
     <label>Status atual<select name="status">${opcoes([['atingido', 'Atingido'], ['atencao', 'Atenção'], ['desvio', 'Desvio'], ['sem_medicao', 'Sem medição']], q.status, 'Todos')}</select></label>
     ${Object.values(q).some(Boolean) ? '<a class="btn peq" href="#/indicadores">Limpar filtros</a>' : ''}
   </form>
-  <div class="tabela-wrap" id="tabIndicadores"></div></div>`;
+  <div class="barra-lista"><label class="check"><input type="checkbox" id="agrupar" ${prefInd.agrupar !== false ? 'checked' : ''}> Agrupar por área</label>
+    <span id="acoesGrupos"><button type="button" class="link-btn" id="abrirTodos">Expandir todos</button> · <button type="button" class="link-btn" id="fecharTodos">Recolher todos</button></span>
+    <span class="muted" id="contagemInd"></span></div>
+  <div id="tabIndicadores"></div></div>`;
+
+  const busca = $('#buscaInd', el);
+  const filtrados = () => {
+    const t = busca.value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (!t) return lista;
+    return lista.filter((i) => `${i.codigo || ''} ${i.nome} ${i.responsavel || ''} ${i.departamento}`.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').includes(t));
+  };
   const desenhar = () => {
-    $('#tabIndicadores', el).innerHTML = `<table><thead>${cabecalhoOrdenavel(COLUNAS_INDICADORES, ordemIndicadores)}</thead><tbody>
-  ${ordenarLista(lista, COLUNAS_INDICADORES, ordemIndicadores).map((i) => `<tr><td><a href="#/indicadores/${i.id}"><b>${esc(i.codigo ? i.codigo + ' · ' : '')}${esc(i.nome)}</b></a>${i.tipo === 'calculado' ? ' ' + selo('pendente', 'ƒ calculado') : ''}</td><td>${esc(i.departamento)}</td>
-    <td class="muted">${esc(faixaTexto(i))}</td>
-    <td class="num">${i.ultima_medicao ? fmt(i.ultima_medicao.valor) + ' <span class="muted">' + mesBR(i.ultima_medicao.periodo) + '</span>' : '—'}</td>
-    <td>${selo(i.ultima_medicao?.status || 'sem_medicao')}</td><td class="num">${i.desvio_pct === null ? '—' : (i.desvio_pct > 0 ? '+' : '') + fmt(i.desvio_pct, 1) + '%'}</td>
-    <td>${selo(i.tendencia)}</td>
-    <td>${i.analises_pendentes ? selo('desvio', i.analises_pendentes + ' sem análise') : ''} ${i.planos_abertos ? selo('em_andamento', i.planos_abertos + ' plano(s)') : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum indicador encontrado</td></tr>'}
-  </tbody></table>`;
+    const itens = filtrados();
+    const agrupar = $('#agrupar', el).checked;
+    $('#acoesGrupos', el).hidden = !agrupar;
+    $('#contagemInd', el).textContent = `${itens.length} de ${base.length} indicador(es)`;
+    if (!itens.length) { $('#tabIndicadores', el).innerHTML = vazio('Nenhum indicador encontrado'); return; }
+    if (!agrupar) {
+      $('#tabIndicadores', el).innerHTML = `<div class="tabela-wrap"><table class="compacta"><thead>${cabecalhoOrdenavel(COLUNAS_INDICADORES, ordemIndicadores)}</thead><tbody>
+        ${ordenarLista(itens, COLUNAS_INDICADORES, ordemIndicadores).map((i) => linhaIndicador(i, true)).join('')}</tbody></table></div>`;
+      return;
+    }
+    // Agrupado: um bloco recolhível por departamento; filtros/busca ativos abrem todos os blocos
+    const forcarAberto = !!(busca.value.trim() || q.status || q.departamento_id || q.responsavel);
+    const cols = COLUNAS_INDICADORES.filter((c) => c.id !== 'departamento');
+    const grupos = new Map();
+    for (const i of itens) { if (!grupos.has(i.departamento)) grupos.set(i.departamento, []); grupos.get(i.departamento).push(i); }
+    $('#tabIndicadores', el).innerHTML = [...grupos.entries()].sort((a, b) => a[0].localeCompare(b[0], 'pt-BR')).map(([dep, inds]) => {
+      const aberto = forcarAberto || gruposAbertos.has(dep);
+      const resumo = ROT_STATUS.map(([s, t]) => { const n = inds.filter((i) => statusDe(i) === s).length; return n ? `<span class="selo ${s}" title="${t}">${n} ${t.toLowerCase()}</span>` : ''; }).join(' ');
+      const pend = inds.reduce((s, i) => s + (i.analises_pendentes || 0), 0);
+      return `<section class="grupo-ind ${aberto ? 'aberto' : ''}">
+        <button type="button" class="grupo-cab" data-grupo="${esc(dep)}" aria-expanded="${aberto}"><span class="seta-grupo" aria-hidden="true">▸</span>
+          <b>${esc(dep)}</b><span class="muted">${inds.length} indicador(es)</span><span class="grupo-resumo">${resumo}${pend ? ` ${selo('desvio', pend + ' sem análise')}` : ''}</span></button>
+        ${aberto ? `<div class="tabela-wrap"><table class="compacta"><thead>${cabecalhoOrdenavel(cols, ordemIndicadores)}</thead><tbody>
+          ${ordenarLista(inds, cols, ordemIndicadores).map((i) => linhaIndicador(i, false)).join('')}</tbody></table></div>` : ''}
+      </section>`;
+    }).join('');
   };
   desenhar();
+  let tBusca; busca.addEventListener('input', () => { clearTimeout(tBusca); tBusca = setTimeout(desenhar, 150); });
+  $('#agrupar', el).addEventListener('change', (e) => { e.stopPropagation(); prefInd.agrupar = e.target.checked; salvarPrefInd(); desenhar(); });
+  $('#abrirTodos', el).onclick = () => { lista.forEach((i) => gruposAbertos.add(i.departamento)); salvarGrupos(); desenhar(); };
+  $('#fecharTodos', el).onclick = () => { gruposAbertos.clear(); salvarGrupos(); desenhar(); };
+  $('#tabIndicadores', el).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-grupo]'); if (!b) return;
+    const dep = b.dataset.grupo;
+    if (gruposAbertos.has(dep)) gruposAbertos.delete(dep); else gruposAbertos.add(dep);
+    salvarGrupos(); desenhar();
+    $(`[data-grupo="${CSS.escape(dep)}"]`, el)?.focus();
+  });
   ligarOrdenacao($('#tabIndicadores', el), () => ordemIndicadores, (nova) => {
     ordemIndicadores = nova;
     try { sessionStorage.setItem('ordemIndicadores', JSON.stringify(nova)); } catch { /* sem armazenamento */ }
     desenhar();
     $(`[data-ordenar="${nova.col}"]`, el)?.focus();
   });
-  $('#filtros', el).addEventListener('change', (e) => irPara('#/indicadores?' + qs(dadosForm(e.currentTarget))));
+  $('#filtros', el).addEventListener('change', (e) => { if (e.target.id === 'buscaInd') return; const d = dadosForm(e.currentTarget); delete d.buscaInd; irPara('#/indicadores?' + qs(d)); });
   if ($('#novo', el)) $('#novo', el).onclick = tentar(async () => {
     const corpo = abrirModal('Novo indicador', await formIndicador(), async (d) => { const n = await api('/indicadores', { metodo: 'POST', corpo: d }); cacheObjetivos = null; cacheResponsaveis = null; irPara('#/indicadores/' + n.id); toast('Indicador criado'); return false; }, { largo: true });
     ligarFormIndicador(corpo); fecharModalSeNavegar();

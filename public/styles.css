@@ -69,6 +69,25 @@ th { font-size: 12px; color: var(--txt2); font-weight: 600; text-transform: uppe
 tr:last-child td { border-bottom: none; }
 .th-ordenar { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; border-radius: 4px; }
 .th-ordenar:hover, .th-ordenar.ativa { color: var(--txt); }
+/* Lista de indicadores: resumo por status, agrupamento por área, linhas compactas */
+.resumo-status { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.resumo-status .stat { padding: 10px 14px; }
+.resumo-status .stat .val { font-size: 22px; }
+.resumo-status .stat.ativo { border-color: var(--pri); box-shadow: inset 0 0 0 1px var(--pri); }
+@media (max-width: 760px) { .resumo-status { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.filtros label.busca { flex: 1; min-width: 220px; }
+.barra-lista { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: -2px 0 10px; font-size: 13px; }
+.barra-lista #contagemInd { margin-left: auto; }
+table.compacta th, table.compacta td { padding: 6px 8px; }
+.grupo-ind { border: 1px solid var(--borda); border-radius: 10px; margin-bottom: 8px; overflow: hidden; background: var(--sup); }
+.grupo-ind.aberto { box-shadow: var(--sombra); }
+.grupo-cab { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; cursor: pointer; }
+.grupo-cab:hover { background: var(--sup2); }
+.grupo-cab:focus-visible { outline: 2px solid var(--pri); outline-offset: -2px; }
+.grupo-cab .grupo-resumo { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.seta-grupo { display: inline-block; width: 12px; color: var(--txt2); transition: transform .15s; }
+.grupo-ind.aberto .seta-grupo { transform: rotate(90deg); }
+.grupo-ind .tabela-wrap { border-top: 1px solid var(--borda); }
 .th-ordenar:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
 .th-ordenar .seta { font-size: 10px; opacity: .45; }
 .th-ordenar.ativa .seta { opacity: 1; color: var(--pri); }
