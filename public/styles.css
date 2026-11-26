@@ -88,6 +88,22 @@ table.compacta th, table.compacta td { padding: 6px 8px; }
 .seta-grupo { display: inline-block; width: 12px; color: var(--txt2); transition: transform .15s; }
 .grupo-ind.aberto .seta-grupo { transform: rotate(90deg); }
 .grupo-ind .tabela-wrap { border-top: 1px solid var(--borda); }
+/* Painel: cartões de resumo numa linha só no desktop (até 7), quebrando de forma regular em telas menores */
+.resumo-painel { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.resumo-painel .stat { padding: 10px 14px; }
+.resumo-painel .stat .val { font-size: 22px; }
+/* Painel: duas colunas independentes (cada card com a altura do seu conteúdo) */
+.painel-colunas { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+.painel-coluna { min-width: 0; }
+@media (max-width: 900px) { .painel-colunas { grid-template-columns: 1fr; } }
+.tab-deptos th { white-space: nowrap; font-size: 11px; }
+.tab-deptos td:first-child { min-width: 150px; }
+.tab-deptos td.num, .tab-deptos th.num { width: 1%; padding-left: 4px; padding-right: 4px; }
+.tab-deptos .col-saude { width: 28%; min-width: 90px; }
+.tab-deptos .col-saude .barra { min-width: 40px; }
+.alertas-lista { max-height: 320px; overflow-y: auto; margin-top: 6px; padding-right: 4px; }
+#cardRanking .depto-topo { flex-wrap: wrap; gap: 10px; }
+#cardRanking .filtros label { min-width: 130px !important; }
 details.sem-dados { margin-top: 14px; border-top: 1px solid var(--borda); padding-top: 10px; }
 details.sem-dados > summary { cursor: pointer; padding: 4px 0; }
 .th-ordenar:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }

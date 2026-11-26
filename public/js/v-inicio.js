@@ -51,7 +51,7 @@ rota('/', async (el) => {
       <div class="nota-grande">${moeda(meu.bonus)}</div></div><p class="dica">Valor ${meu.ciclo.status === 'encerrado' ? 'final' : 'parcial, calculado com os resultados lançados até agora'}. Clique para ver o detalhamento.</p></a>`;
   }
   if (pi) {
-    html += `<div class="grid g4" style="margin-bottom:16px">
+    html += `<div class="grid resumo-painel" style="margin-bottom:16px">
       ${stat('Indicadores ativos', pi.total_indicadores, '', '', '#/indicadores')}
       ${stat('Atingidos', pi.status.atingido, 'ok', '', '#/indicadores?status=atingido')}
       ${stat('Em atenção', pi.status.atencao, 'at', '', '#/indicadores?status=atencao')}
@@ -59,16 +59,18 @@ rota('/', async (el) => {
       ${pi.status.sem_medicao ? stat('Sem medição', pi.status.sem_medicao, '', '', '#/indicadores?status=sem_medicao') : ''}
       ${stat('Planos em aberto', pi.planos.abertos, '', '', '#/planos?status=abertos')}
       ${stat('Planos com atraso', pi.planos.com_atraso, pi.planos.com_atraso ? 'er' : '', '', '#/planos?atrasados=1')}</div>
-    <div class="grid g2">
-      <div class="card"><h2>Alertas</h2>${pi.alertas.length ? pi.alertas.slice(0, 12).map((a) => `<div class="alerta">${selo(a.gravidade === 'alta' ? 'desvio' : a.gravidade === 'media' ? 'atencao' : 'pendente', a.gravidade)}
-        <a href="${a.plano_id ? '#/planos/' + a.plano_id : '#/indicadores/' + a.indicador_id}">${esc(a.mensagem)}</a></div>`).join('') + (pi.alertas.length > 12 ? `<p class="muted">+${pi.alertas.length - 12} alerta(s)</p>` : '') : vazio('Nenhum alerta 🎉')}</div>
-      <div class="card"><h2>Indicadores por departamento</h2><div class="tabela-wrap"><table><thead><tr><th>Departamento</th><th class="num">Total</th><th class="num">Atingido</th><th class="num">Atenção</th><th class="num">Desvio</th><th>Saúde</th></tr></thead><tbody>
+    <div class="painel-colunas"><div class="painel-coluna">
+      <div class="card"><div class="depto-topo"><h2 style="margin:0">Alertas</h2>${pi.alertas.length ? `<span class="muted" style="font-size:13px">${pi.alertas.length}</span>` : ''}</div>
+        ${pi.alertas.length ? `<div class="alertas-lista">${pi.alertas.map((a) => `<div class="alerta">${selo(a.gravidade === 'alta' ? 'desvio' : a.gravidade === 'media' ? 'atencao' : 'pendente', a.gravidade)}
+        <a href="${a.plano_id ? '#/planos/' + a.plano_id : '#/indicadores/' + a.indicador_id}">${esc(a.mensagem)}</a></div>`).join('')}</div>` : '<p class="muted" style="margin:8px 0 0">✓ Nenhum alerta no momento.</p>'}</div>
+      ${temModulo('governanca') ? '<div class="card" id="cardRanking"></div>' : ''}
+      </div><div class="painel-coluna">
+      <div class="card"><h2>Indicadores por departamento</h2><div class="tabela-wrap"><table class="compacta tab-deptos"><thead><tr><th>Departamento</th><th class="num">Total</th><th class="num">Atingido</th><th class="num">Atenção</th><th class="num">Desvio</th><th>Saúde</th></tr></thead><tbody>
         ${pi.por_departamento.map((d) => {
     const lk = (n, st) => (n ? `<a href="#/indicadores?departamento_id=${d.departamento_id}${st ? '&status=' + st : ''}">${n}</a>` : n);
-    return `<tr><td><a href="#/indicadores?departamento_id=${d.departamento_id}">${esc(d.departamento)}</a></td><td class="num">${lk(d.total)}</td><td class="num">${lk(d.atingido, 'atingido')}</td><td class="num">${lk(d.atencao, 'atencao')}</td><td class="num">${lk(d.desvio, 'desvio')}</td><td style="min-width:140px">${barra(d.total ? (d.atingido / d.total) * 100 : 0, 100)}</td></tr>`;
+    return `<tr><td><a href="#/indicadores?departamento_id=${d.departamento_id}">${esc(d.departamento)}</a></td><td class="num">${lk(d.total)}</td><td class="num">${lk(d.atingido, 'atingido')}</td><td class="num">${lk(d.atencao, 'atencao')}</td><td class="num">${lk(d.desvio, 'desvio')}</td><td class="col-saude">${barra(d.total ? (d.atingido / d.total) * 100 : 0, 100)}</td></tr>`;
   }).join('') || '<tr><td colspan="6" class="vazio">Sem indicadores</td></tr>'}
-      </tbody></table></div></div></div>`;
-    if (temModulo('governanca')) html += '<div class="card" id="cardRanking"></div>';
+      </tbody></table></div></div></div></div>`;
   }
   if (ap && ap.departamentos.length) {
     const g = ap.gatilho_corporativo;
