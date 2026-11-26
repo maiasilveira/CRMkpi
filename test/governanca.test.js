@@ -20,20 +20,63 @@ async function cenario(t) {
   return { ...s, lojaA, lojaB, iA, iB };
 }
 
-test('benchmark: ranking por índice composto e comparativo do mesmo indicador entre unidades', async (t) => {
+test('benchmark: ranking de KPIs no período, metas como coluna informativa e comparativo entre unidades', async (t) => {
   const { req, lojaA, lojaB } = await cenario(t);
   const c = (await req('POST', '/metas/ciclos', { nome: 'C', inicio: '2026-01', fim: '2026-12', status: 'ativo' })).body;
   for (const [d, v] of [[lojaA, 100], [lojaB, 85]]) {
     const m = (await req('POST', '/metas', { ciclo_id: c.id, departamento_id: d.id, nome: 'M', polaridade: 'maior_melhor', peso: 100, gatilho: 80, alvo: 100 })).body;
     await req('POST', `/metas/${m.id}/resultados`, { periodo: '2026-05', valor: v });
   }
-  const b = (await req('GET', '/governanca/benchmark')).body;
+  const b = (await req('GET', '/governanca/benchmark?periodo=2026-05')).body;
+  assert.equal(b.periodo, '2026-05');
   assert.equal(b.ranking[0].departamento, 'Loja Centro');
   assert.equal(b.ranking[0].posicao, 1);
-  assert.equal(b.ranking[0].pct_atingidos, 100);
+  assert.equal(b.ranking[0].indice, 100);
   assert.equal(b.ranking[1].desvios, 1);
+  assert.equal(b.ranking[1].indice, 0);
+  // Metas bonificáveis: coluna informativa, fora do índice
+  assert.equal(b.com_metas, true);
+  assert.equal(b.ranking[0].nota_metas !== null && b.ranking[1].nota_metas !== null, true);
   assert.equal(b.comparativo[0].indicador, 'Vendas por m²');
   assert.deepEqual(b.comparativo[0].itens.map((i) => i.valor), [120, 70]);
+  // Outro mês sem medições: ninguém é ranqueado; as áreas vão para "sem dados suficientes"
+  const vazio = (await req('GET', '/governanca/benchmark?periodo=2026-06')).body;
+  assert.deepEqual([vazio.ranking.length, vazio.sem_dados.length], [0, 2]);
+  assert.equal((await req('GET', '/governanca/benchmark?nivel=setor')).status, 400);
+});
+
+test('benchmark: mesmo período, nível da estrutura, pontuação e cobertura mínima', async (t) => {
+  const s = await servidor();
+  t.after(s.fechar);
+  const { req } = s;
+  const dir = (await req('POST', '/departamentos', { nome: 'Diretoria X', tipo: 'diretoria' })).body;
+  const gA = (await req('POST', '/departamentos', { nome: 'Gerência A', tipo: 'gerencia', pai_id: dir.id })).body;
+  const gB = (await req('POST', '/departamentos', { nome: 'Gerência B', tipo: 'gerencia', pai_id: dir.id })).body;
+  const cA1 = (await req('POST', '/departamentos', { nome: 'Coord A1', tipo: 'coordenacao', pai_id: gA.id })).body;
+  const cA2 = (await req('POST', '/departamentos', { nome: 'Coord A2', tipo: 'coordenacao', pai_id: gA.id })).body;
+  const ind = async (dep, valor, periodo = '2026-05', frequencia = 'mensal') => {
+    const i = (await req('POST', '/indicadores', { nome: `I-${Math.random()}`, departamento_id: dep.id, polaridade: 'maior_melhor', meta: 100, limite_inferior: 90, frequencia })).body;
+    if (valor !== null) await req('POST', `/indicadores/${i.id}/medicoes`, { periodo, valor });
+    return i;
+  };
+  await ind(cA1, 100); // atingido → 100
+  await ind(cA2, 95); // atenção → 50
+  await ind(gB, 100, '2026-04', 'trimestral'); // trimestral medido em abril vale para maio
+  await ind(gB, 50); // desvio → 0
+  await ind(gB, null); // não medido
+  let b = (await req('GET', '/governanca/benchmark?periodo=2026-05&nivel=gerencia')).body;
+  const por = (n) => b.ranking.find((d) => d.departamento === n) || b.sem_dados.find((d) => d.departamento === n);
+  assert.deepEqual([por('Gerência A').indice, por('Gerência A').medidos, por('Gerência A').indicadores], [75, 2, 2], 'coordenações agregadas na gerência; atenção vale 50');
+  assert.deepEqual([por('Gerência B').indice, por('Gerência B').medidos, por('Gerência B').cobertura], [50, 2, 66.7], 'trimestral de abril conta em maio');
+  assert.deepEqual(b.ranking.map((d) => d.departamento), ['Gerência A', 'Gerência B']);
+  // Cobertura mínima de 50%: Gerência B com só 1 de 3 medidos sai do ranking
+  b = (await req('GET', '/governanca/benchmark?periodo=2026-07&nivel=gerencia')).body;
+  assert.equal(b.ranking.length, 0, 'trimestral de abril não vale mais em julho');
+  // Nível diretoria agrega tudo; nível "área" mostra as coordenações
+  b = (await req('GET', '/governanca/benchmark?periodo=2026-05&nivel=diretoria')).body;
+  assert.deepEqual([b.ranking.length, b.ranking[0].departamento, b.ranking[0].indicadores], [1, 'Diretoria X', 5]);
+  b = (await req('GET', '/governanca/benchmark?periodo=2026-05&nivel=area')).body;
+  assert.deepEqual(b.ranking.map((d) => d.departamento), ['Coord A1', 'Coord A2', 'Gerência B']);
 });
 
 test('reuniões: pauta automática, decisões, escopo e alerta de atraso', async (t) => {

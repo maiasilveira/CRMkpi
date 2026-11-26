@@ -12,16 +12,45 @@ function criarGovernancaService(db, core, { indicadores = null, metas = null } =
   const cicloAtivo = () => (metas ? metas.listarCiclos().find((c) => c.status === 'ativo') || metas.listarCiclos()[0] : null);
 
   // ================= Benchmark / ranking =================
-  function benchmark({ ciclo_id } = {}) {
-    const deptos = new Map(core.listarDepartamentos().map((d) => [d.id, { departamento_id: d.id, departamento: d.nome, tipo: d.tipo }]));
-    const linha = (id) => deptos.get(id);
+  // Ranking de DESEMPENHO DOS KPIs entre áreas, num mesmo período e num mesmo nível da estrutura.
+  // Pontuação por indicador medido: atingido 100, atenção 50, desvio 0. Índice = média dos pontos.
+  // Só entra no ranking a área com pelo menos MIN_COBERTURA dos indicadores medidos no período.
+  // A nota das metas bonificáveis é exibida à parte (não compõe o índice).
+  const MIN_COBERTURA = 0.5;
+  const PONTOS = { atingido: 100, atencao: 50, desvio: 0 };
+  const JANELA = { mensal: 1, bimestral: 2, trimestral: 3, semestral: 6, anual: 12 }; // meses em que uma medição vale para o período
+  const NIVEIS = ['area', 'gerencia', 'diretoria'];
+  const mesesEntre = (a, b) => { const [ya, ma] = a.split('-').map(Number); const [yb, mb] = b.split('-').map(Number); return (yb - ya) * 12 + (mb - ma); };
+  function periodoPadrao() { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); }
+
+  function benchmark({ ciclo_id, periodo, nivel } = {}) {
+    const per = periodo ? E.periodo(periodo) : periodoPadrao();
+    const niv = E.umDe(nivel, 'nivel', NIVEIS, 'gerencia');
+    // Estrutura completa (para subir na hierarquia); a visibilidade vem da lista de indicadores, que já respeita o escopo
+    const todos = new Map(db.prepare('SELECT id, nome, tipo, pai_id FROM departamentos').all().map((d) => [d.id, d]));
+    const grupoDe = (depId) => {
+      if (niv === 'area') return todos.get(depId);
+      for (let d = todos.get(depId); d; d = todos.get(d.pai_id)) if (d.tipo === niv) return d;
+      return todos.get(depId); // sem nó desse nível acima (ex.: KPI direto na diretoria): a própria área
+    };
+    const grupos = new Map();
+    const linha = (depId) => {
+      const g = grupoDe(depId); if (!g) return null;
+      if (!grupos.has(g.id)) grupos.set(g.id, { departamento_id: g.id, departamento: g.nome, tipo: g.tipo, indicadores: 0, medidos: 0, atingidos: 0, atencao: 0, desvios: 0, pontos: 0 });
+      return grupos.get(g.id);
+    };
     const comparativo = [];
     if (indicadores) {
       const inds = indicadores.listar();
       for (const i of inds) {
         const d = linha(i.departamento_id); if (!d) continue;
-        d.indicadores = (d.indicadores || 0) + 1;
-        if (i.ultima_medicao) { d.medidos = (d.medidos || 0) + 1; if (i.ultima_medicao.status === 'atingido') d.atingidos = (d.atingidos || 0) + 1; if (i.ultima_medicao.status === 'desvio') d.desvios = (d.desvios || 0) + 1; }
+        d.indicadores++;
+        // Medição que vale para o período: a mais recente até o período, dentro da janela da frequência
+        const janela = JANELA[i.frequencia] || 1;
+        const med = indicadores.listarMedicoes(i.id).filter((m) => m.periodo <= per && mesesEntre(m.periodo, per) < janela).pop();
+        if (!med || !(med.status in PONTOS)) continue;
+        d.medidos++; d.pontos += PONTOS[med.status];
+        if (med.status === 'atingido') d.atingidos++; else if (med.status === 'atencao') d.atencao++; else d.desvios++;
       }
       for (const p of indicadores.listarPlanos()) {
         const d = linha(p.departamento_id); if (!d) continue;
@@ -41,24 +70,39 @@ function criarGovernancaService(db, core, { indicadores = null, metas = null } =
         comparativo.push({ indicador: lista[0].nome, unidade: lista[0].unidade, polaridade: pol, itens });
       }
     }
-    let ciclo = null;
+    // Metas bonificáveis: informativo, em coluna à parte, só se o ciclo tiver metas
+    let ciclo = null; let comMetas = false;
     if (metas) {
       ciclo = ciclo_id ? metas.obterCiclo(Number(ciclo_id)) : cicloAtivo();
-      if (ciclo) for (const d of metas.apurarCiclo(ciclo.id).departamentos) { const l = linha(d.departamento_id); if (l) l.nota_metas = d.nota; }
+      if (ciclo) {
+        const notas = new Map();
+        for (const d of metas.apurarCiclo(ciclo.id).departamentos.filter((x) => x.metas?.length)) {
+          const g = grupoDe(d.departamento_id); if (!g) continue;
+          if (!notas.has(g.id)) notas.set(g.id, []); notas.get(g.id).push(d.nota);
+        }
+        comMetas = notas.size > 0;
+        for (const [gid, ns] of notas) { const l = grupos.get(gid) || linha(gid); if (l) l.nota_metas = ns.reduce((s, x) => s + x, 0) / ns.length; }
+      }
     }
     const r1 = (x) => (x === null || x === undefined ? null : Math.round(x * 10) / 10);
-    const ranking = [...deptos.values()].filter((d) => d.indicadores || d.nota_metas !== undefined).map((d) => {
-      const pctAtingidos = d.medidos ? (100 * (d.atingidos || 0)) / d.medidos : null;
-      const eficacia = d.verificados ? (100 * (d.eficazes || 0)) / d.verificados : null;
-      // Índice composto: 50% indicadores atingidos, 30% nota de metas (teto 100), 20% eficácia dos planos — reponderado se faltar algum
-      const comps = [[pctAtingidos, 50], [d.nota_metas === undefined ? null : Math.min(100, d.nota_metas), 30], [eficacia, 20]].filter(([v]) => v !== null);
-      const peso = comps.reduce((s, [, w]) => s + w, 0);
-      return { departamento_id: d.departamento_id, departamento: d.departamento, indicadores: d.indicadores || 0, pct_atingidos: r1(pctAtingidos), desvios: d.desvios || 0,
-        planos_abertos: d.planos_abertos || 0, planos_atrasados: d.planos_atrasados || 0, eficacia_planos: r1(eficacia), nota_metas: r1(d.nota_metas ?? null),
-        indice: peso ? r1(comps.reduce((s, [v, w]) => s + v * w, 0) / peso) : null };
-    }).sort((a, b) => (b.indice ?? -1) - (a.indice ?? -1)).map((d, i) => ({ posicao: i + 1, ...d }));
-    return { ciclo: ciclo ? { id: ciclo.id, nome: ciclo.nome } : null, ranking, comparativo,
-      metodologia: 'Índice = 50% indicadores atingidos + 30% nota de metas (máx. 100) + 20% eficácia dos planos; componentes ausentes são desconsiderados e os pesos, redistribuídos.' };
+    const linhas = [...grupos.values()].filter((d) => d.indicadores || d.nota_metas !== undefined).map((d) => ({
+      departamento_id: d.departamento_id, departamento: d.departamento, tipo: d.tipo, indicadores: d.indicadores, medidos: d.medidos,
+      cobertura: d.indicadores ? r1((100 * d.medidos) / d.indicadores) : null,
+      atingidos: d.atingidos, atencao: d.atencao, desvios: d.desvios,
+      indice: d.medidos ? r1(d.pontos / d.medidos) : null,
+      pct_atingidos: d.medidos ? r1((100 * d.atingidos) / d.medidos) : null,
+      planos_abertos: d.planos_abertos || 0, planos_atrasados: d.planos_atrasados || 0,
+      eficacia_planos: d.verificados ? r1((100 * (d.eficazes || 0)) / d.verificados) : null,
+      nota_metas: r1(d.nota_metas ?? null),
+    }));
+    const elegivel = (d) => d.indicadores > 0 && d.medidos / d.indicadores >= MIN_COBERTURA;
+    const ranking = linhas.filter(elegivel)
+      .sort((a, b) => b.indice - a.indice || b.cobertura - a.cobertura || a.departamento.localeCompare(b.departamento, 'pt-BR'))
+      .map((d, i) => ({ posicao: i + 1, ...d }));
+    const sem_dados = linhas.filter((d) => !elegivel(d)).sort((a, b) => b.medidos - a.medidos || a.departamento.localeCompare(b.departamento, 'pt-BR'));
+    return { periodo: per, nivel: niv, cobertura_minima: MIN_COBERTURA * 100, ciclo: ciclo ? { id: ciclo.id, nome: ciclo.nome } : null, com_metas: comMetas,
+      ranking, sem_dados, comparativo,
+      metodologia: `Desempenho dos KPIs em ${per}: atingido = 100, atenção = 50, desvio = 0; índice = média dos indicadores medidos. Entram no ranking as áreas com pelo menos ${MIN_COBERTURA * 100}% dos indicadores medidos no período. A nota de metas bonificáveis é informativa e não compõe o índice.` };
   }
 
   // ================= Reuniões de análise crítica =================

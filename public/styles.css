@@ -88,6 +88,8 @@ table.compacta th, table.compacta td { padding: 6px 8px; }
 .seta-grupo { display: inline-block; width: 12px; color: var(--txt2); transition: transform .15s; }
 .grupo-ind.aberto .seta-grupo { transform: rotate(90deg); }
 .grupo-ind .tabela-wrap { border-top: 1px solid var(--borda); }
+details.sem-dados { margin-top: 14px; border-top: 1px solid var(--borda); padding-top: 10px; }
+details.sem-dados > summary { cursor: pointer; padding: 4px 0; }
 .th-ordenar:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; }
 .th-ordenar .seta { font-size: 10px; opacity: .45; }
 .th-ordenar.ativa .seta { opacity: 1; color: var(--pri); }
