@@ -6,7 +6,7 @@ function montarNav() {
   if (!estado.usuario) { $('#nav').innerHTML = ''; return; }
   if (temModulo('indicadores')) itens.push(['#/indicadores', 'Indicadores'], ['#/planos', 'Planos'], ['#/mapa', 'Mapa estratégico']);
   if (temModulo('metas')) itens.push(['#/metas', 'Metas']);
-  if (temModulo('governanca')) itens.push(['#/reunioes', 'Reuniões'], ['#/benchmark', 'Benchmark']);
+  if (temModulo('governanca')) itens.push(['#/reunioes', 'Reuniões']); // ranking de KPIs fica no Painel
   $('#nav').innerHTML = itens.map(([h, t]) => `<a href="${h}">${t}</a>`).join('');
   const admin = [
     ['#/departamentos', 'Estrutura organizacional', true],

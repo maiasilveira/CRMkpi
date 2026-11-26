@@ -70,7 +70,7 @@ test('interface: login, navegação por todas as telas e fluxos principais', { s
     [`#/indicadores/${ids.ind}?aba=sazonal`, 'indicador-sazonal'], [`#/indicadores/${ids.ind}?aba=historico`, 'indicador-historico'], [`#/indicadores/${ids.ind}?aba=colab`, 'indicador-colab'],
     ['#/planos', 'planos'], [`#/planos/${ids.plano}`, 'plano'], ['#/mapa', 'mapa'], ['#/metas', 'metas'], ['#/metas?aba=individuais', 'metas-individuais'],
     ['#/metas?aba=participantes', 'metas-participantes'], ['#/metas?aba=desdobramento', 'metas-desdobramento'], ['#/metas/alteracoes', 'alteracoes'],
-    ['#/colaboradores', 'colaboradores'], ['#/reunioes', 'reunioes'], [`#/reunioes/${ids.reuniao}`, 'reuniao'], ['#/benchmark', 'benchmark'],
+    ['#/colaboradores', 'colaboradores'], ['#/reunioes', 'reunioes'], [`#/reunioes/${ids.reuniao}`, 'reuniao'],
     ['#/importar', 'importar'], ['#/lancar', 'lancar'], ['#/admin/integracoes', 'integracoes'], ['#/departamentos', 'departamentos'], ['#/admin/usuarios', 'usuarios'],
     ['#/admin/tokens', 'tokens'], ['#/admin/config', 'config'], ['#/auditoria', 'auditoria'], ['#/perfil', 'perfil']];
   for (const [h, n] of telas) await visitar(p, h, n);

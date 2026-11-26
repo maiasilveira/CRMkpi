@@ -1,38 +1,8 @@
 'use strict';
-/* Governança: benchmark entre áreas e reuniões de análise crítica. */
+/* Governança: reuniões de análise crítica (o ranking de KPIs fica no Painel). */
 
-rota('/benchmark', async (el, _, q) => {
-  const b = await api('/governanca/benchmark?' + qs({ ciclo_id: q.ciclo, periodo: q.periodo, nivel: q.nivel }));
-  const ciclos = temModulo('metas') ? await api('/metas/ciclos') : [];
-  // Medalhas só fazem sentido com pelo menos 3 áreas ranqueadas
-  const medalha = (p) => (b.ranking.length >= 3 ? ['🥇', '🥈', '🥉'][p - 1] || p : p);
-  const NIVEIS = [['gerencia', 'Gerência'], ['diretoria', 'Diretoria'], ['area', 'Área do indicador (mais detalhado)']];
-  const status = (d) => [['atingido', d.atingidos, 'atingido'], ['atencao', d.atencao, 'atenção'], ['desvio', d.desvios, 'desvio']]
-    .filter(([, n]) => n).map(([s, n, t]) => selo(s, `${n} ${t}`)).join(' ') || '<span class="muted">—</span>';
-  const colMetas = b.com_metas;
-  const linhaTab = (d, ranqueada) => `<tr>${ranqueada ? `<td class="posicao">${medalha(d.posicao)}</td>` : ''}<td><b>${esc(d.departamento)}</b> <span class="muted" style="font-size:12px">${rot(d.tipo)}</span></td>
-    ${ranqueada ? `<td style="min-width:150px">${barra(d.indice, 100)}</td>` : ''}<td class="num">${d.medidos}/${d.indicadores} <span class="muted">(${pct(d.cobertura)})</span></td><td>${status(d)}</td>
-    ${colMetas ? `<td class="num">${pct(d.nota_metas)}</td>` : ''}<td class="num">${pct(d.eficacia_planos)}</td><td class="num">${d.planos_atrasados || '—'}</td></tr>`;
-  const cab = (ranqueada) => `<tr>${ranqueada ? '<th>#</th>' : ''}<th>Área</th>${ranqueada ? '<th>Índice de KPIs</th>' : ''}<th class="num">Medidos no período</th><th>Situação</th>
-    ${colMetas ? '<th class="num">Nota metas (ciclo)</th>' : ''}<th class="num">Eficácia planos</th><th class="num">Planos atrasados</th></tr>`;
-  el.innerHTML = `<div class="cabecalho"><div><h1>Benchmark entre áreas</h1><div class="muted">${esc(b.metodologia)}</div></div></div>
-  <div class="card"><form class="filtros" id="fBench" onsubmit="return false">
-    <label>Período<input type="month" name="periodo" value="${esc(b.periodo)}"></label>
-    <label>Comparar por<select name="nivel">${opcoes(NIVEIS, b.nivel)}</select></label>
-    ${ciclos.length ? `<label>Metas bonificáveis (coluna informativa)<select name="ciclo">${opcoes(ciclos.map((c) => [c.id, c.nome]), b.ciclo?.id)}</select></label>` : ''}
-  </form>
-  ${ciclos.length && !colMetas ? `<p class="dica" style="margin-top:0">O ciclo ${esc(b.ciclo?.nome || '')} ainda não tem metas cadastradas — a coluna de metas aparece quando houver.</p>` : ''}
-  <h2>Ranking <span class="muted" style="font-weight:400;font-size:14px">— ${b.ranking.length} área(s) com ao menos ${b.cobertura_minima}% dos indicadores medidos em ${mesBR(b.periodo)}</span></h2>
-  <div class="tabela-wrap"><table><thead>${cab(true)}</thead><tbody>
-  ${b.ranking.map((d) => linhaTab(d, true)).join('') || `<tr><td colspan="9" class="vazio">Nenhuma área com dados suficientes em ${mesBR(b.periodo)}. Lance as medições do período ou escolha outro mês.</td></tr>`}</tbody></table></div>
-  ${b.sem_dados.length ? `<details class="sem-dados" ${b.ranking.length ? '' : 'open'}><summary><b>Sem dados suficientes</b> <span class="muted">— ${b.sem_dados.length} área(s) com menos de ${b.cobertura_minima}% dos indicadores medidos (fora do ranking)</span></summary>
-    <div class="tabela-wrap"><table class="compacta"><thead>${cab(false)}</thead><tbody>${b.sem_dados.map((d) => linhaTab(d, false)).join('')}</tbody></table></div></details>` : ''}
-  </div>
-  <div class="card"><h2>Mesmo indicador em várias áreas / unidades</h2>${b.comparativo.map((c) => `<h3>${esc(c.indicador)} <span class="muted">(${rot(c.polaridade)}${c.unidade ? ', ' + esc(c.unidade) : ''})</span></h3>
-    <div class="tabela-wrap"><table><tbody>${c.itens.map((i, k) => `<tr><td style="width:32px">${k + 1}º</td><td><a href="#/indicadores/${i.indicador_id}">${esc(i.departamento)}</a></td><td class="num">${fmt(i.valor)}</td><td>${mesBR(i.periodo)}</td><td>${selo(i.status)}</td></tr>`).join('')}</tbody></table></div>`).join('')
-    || '<p class="muted">Cadastre indicadores com o mesmo nome em departamentos/unidades diferentes para compará-los aqui.</p>'}</div>`;
-  $('#fBench', el).addEventListener('change', (e) => { const d = dadosForm(e.currentTarget); irPara('#/benchmark?' + qs(d)); });
-});
+// A antiga aba Benchmark foi substituída pelo card 'Ranking de KPIs' no Painel; endereços salvos levam ao Painel.
+rota('/benchmark', async () => { irPara('#/'); });
 
 rota('/reunioes', async (el) => {
   const lista = await api('/governanca/reunioes');

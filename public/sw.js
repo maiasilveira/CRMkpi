@@ -1,7 +1,7 @@
 'use strict';
 // Service worker: guarda a "casca" do app para abrir rápido e funcionar como app instalado.
 // As chamadas de API nunca são armazenadas em cache (dados sempre atuais e privados).
-const VERSAO = 'kpi-v6';
+const VERSAO = 'kpi-v7';
 const CASCA = ['/', '/index.html', '/styles.css', '/manifest.webmanifest', '/icon.svg',
   '/js/base.js', '/js/componentes.js', '/js/v-inicio.js', '/js/v-indicadores.js', '/js/v-planos.js', '/js/v-metas.js', '/js/v-governanca.js', '/js/v-admin.js', '/js/main.js'];
 

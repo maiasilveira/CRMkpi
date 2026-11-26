@@ -77,6 +77,8 @@ test('benchmark: mesmo período, nível da estrutura, pontuação e cobertura m�
   assert.deepEqual([b.ranking.length, b.ranking[0].departamento, b.ranking[0].indicadores], [1, 'Diretoria X', 5]);
   b = (await req('GET', '/governanca/benchmark?periodo=2026-05&nivel=area')).body;
   assert.deepEqual(b.ranking.map((d) => d.departamento), ['Coord A1', 'Coord A2', 'Gerência B']);
+  // Empate no índice divide a posição: Coord A2 (50) e Gerência B (50) ficam ambas em 2º
+  assert.deepEqual(b.ranking.map((d) => d.posicao), [1, 2, 2]);
 });
 
 test('reuniões: pauta automática, decisões, escopo e alerta de atraso', async (t) => {

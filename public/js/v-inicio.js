@@ -68,6 +68,7 @@ rota('/', async (el) => {
     return `<tr><td><a href="#/indicadores?departamento_id=${d.departamento_id}">${esc(d.departamento)}</a></td><td class="num">${lk(d.total)}</td><td class="num">${lk(d.atingido, 'atingido')}</td><td class="num">${lk(d.atencao, 'atencao')}</td><td class="num">${lk(d.desvio, 'desvio')}</td><td style="min-width:140px">${barra(d.total ? (d.atingido / d.total) * 100 : 0, 100)}</td></tr>`;
   }).join('') || '<tr><td colspan="6" class="vazio">Sem indicadores</td></tr>'}
       </tbody></table></div></div></div>`;
+    if (temModulo('governanca')) html += '<div class="card" id="cardRanking"></div>';
   }
   if (ap && ap.departamentos.length) {
     const g = ap.gatilho_corporativo;
@@ -81,7 +82,34 @@ rota('/', async (el) => {
   }
   if (!pi && !ap) html += '<div class="card vazio">Nenhum dado disponível.</div>';
   el.innerHTML = html;
+  if ($('#cardRanking', el)) await rankingKpis($('#cardRanking', el));
 });
+
+// ============ RANKING DE KPIs (no Painel) ============
+// Desempenho dos indicadores entre áreas, num mesmo período e nível da estrutura (cálculo em /governanca/benchmark).
+const filtroRanking = { periodo: '', nivel: 'gerencia' };
+async function rankingKpis(card) {
+  const b = await api('/governanca/benchmark?' + qs(filtroRanking));
+  const medalha = (p) => (b.ranking.length >= 3 ? ['🥇', '🥈', '🥉'][p - 1] || p : p);
+  const situacao = (d) => [['atingido', d.atingidos, 'atingido'], ['atencao', d.atencao, 'atenção'], ['desvio', d.desvios, 'desvio']]
+    .filter(([, n]) => n).map(([s, n, t]) => selo(s, `${n} ${t}`)).join(' ') || '<span class="muted">—</span>';
+  const area = (d) => `<a href="#/indicadores?departamento_id=${d.departamento_id}"><b>${esc(d.departamento)}</b></a> <span class="muted" style="font-size:12px">${rot(d.tipo)}</span>`;
+  card.innerHTML = `<div class="depto-topo"><div><h2 style="margin:0">Ranking de KPIs</h2>
+      <div class="muted" style="font-size:13px">Atingido = 100, atenção = 50, desvio = 0 · só áreas com ao menos ${b.cobertura_minima}% dos indicadores medidos no período</div></div>
+    <form class="filtros" id="fRanking" style="margin:0" onsubmit="return false">
+      <label style="min-width:150px">Período<input type="month" name="periodo" value="${esc(b.periodo)}"></label>
+      <label style="min-width:150px">Comparar por<select name="nivel">${opcoes([['gerencia', 'Gerência'], ['diretoria', 'Diretoria'], ['area', 'Área do indicador']], b.nivel)}</select></label></form></div>
+  ${b.ranking.length ? `<div class="tabela-wrap"><table class="compacta"><thead><tr><th>#</th><th>Área</th><th>Índice</th><th class="num">Medidos</th><th>Situação</th></tr></thead><tbody>
+    ${b.ranking.map((d) => `<tr><td class="posicao">${medalha(d.posicao)}</td><td>${area(d)}</td><td style="min-width:150px">${barra(d.indice, 100)}</td>
+      <td class="num">${d.medidos}/${d.indicadores}</td><td>${situacao(d)}</td></tr>`).join('')}</tbody></table></div>`
+    : `<p class="muted" style="margin:8px 0">Nenhuma área com dados suficientes em ${mesBR(b.periodo)}. O ranking aparece conforme as áreas lançam os resultados do mês.</p>`}
+  ${b.sem_dados.length ? `<details class="sem-dados"><summary><b>${b.sem_dados.length} área(s) sem dados suficientes</b> <span class="muted">— menos de ${b.cobertura_minima}% dos indicadores medidos em ${mesBR(b.periodo)}</span></summary>
+    <div class="tabela-wrap"><table class="compacta"><tbody>${b.sem_dados.map((d) => `<tr><td>${area(d)}</td><td class="num">${d.medidos}/${d.indicadores} <span class="muted">(${pct(d.cobertura)})</span></td><td>${situacao(d)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+  $('#fRanking', card).addEventListener('change', tentar(async (e) => {
+    Object.assign(filtroRanking, dadosForm(e.currentTarget));
+    await rankingKpis(card);
+  }));
+}
 
 // ============ LANÇAMENTO RÁPIDO (mobile / PWA) ============
 rota('/lancar', async (el, _, q) => {

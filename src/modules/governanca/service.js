@@ -98,7 +98,9 @@ function criarGovernancaService(db, core, { indicadores = null, metas = null } =
     const elegivel = (d) => d.indicadores > 0 && d.medidos / d.indicadores >= MIN_COBERTURA;
     const ranking = linhas.filter(elegivel)
       .sort((a, b) => b.indice - a.indice || b.cobertura - a.cobertura || a.departamento.localeCompare(b.departamento, 'pt-BR'))
-      .map((d, i) => ({ posicao: i + 1, ...d }));
+      .map((d) => ({ posicao: 0, ...d }));
+    // Empate no índice divide a posição (ranking "1, 2, 2, 4")
+    ranking.forEach((d, i) => { d.posicao = i > 0 && d.indice === ranking[i - 1].indice ? ranking[i - 1].posicao : i + 1; });
     const sem_dados = linhas.filter((d) => !elegivel(d)).sort((a, b) => b.medidos - a.medidos || a.departamento.localeCompare(b.departamento, 'pt-BR'));
     return { periodo: per, nivel: niv, cobertura_minima: MIN_COBERTURA * 100, ciclo: ciclo ? { id: ciclo.id, nome: ciclo.nome } : null, com_metas: comMetas,
       ranking, sem_dados, comparativo,
